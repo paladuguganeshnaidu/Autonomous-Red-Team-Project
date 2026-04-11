@@ -1,0 +1,39 @@
+AUTONOMOUS RECON - VULNERABILITY SUMMARY
+==========================================================
+Target: toriiminds.com
+Run ID: 4d7ae929802f466396d641a8d6f2e79a
+Generated: 2026-04-11 18:27:16
+Overall Risk: medium
+Confidence: medium
+
+Total Vulnerability Candidates: 1
+-
+1. Sensitive service exposed on port 22
+   Severity: medium
+   Asset: toriiminds.com
+   Source: nmap
+   Evidence: TCP 22/ssh reported open by nmap.
+   Recommendation: Validate service exposure and restrict access if unnecessary.
+
+High Value Findings
+-
+- Initial target: toriiminds.com
+- Seeded URLs: http://toriiminds.com, https://toriiminds.com
+- Discovered subdomain: frs.toriiminds.com
+- Discovered subdomain: www.toriiminds.com
+- Open TCP port 22 running ssh.
+- Open TCP port 80 running http.
+- Open TCP port 443 running ssl/http.
+
+Risk Signals
+-
+- nuclei returned exit code 1.
+- LLM bypass active after an earlier transport failure.
+- nmap command timed out; visibility may be incomplete.
+- nmap returned exit code -1.
+
+Recommended Next Steps
+-
+- Validate high-confidence findings with targeted manual checks.
+- Prioritize internet-facing assets and sensitive endpoints first.
+- Run authenticated validation for confirmed candidates where in scope.

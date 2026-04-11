@@ -1,0 +1,26 @@
+AUTONOMOUS RECON - VULNERABILITY SUMMARY
+==========================================================
+Target: 127.0.0.1
+Run ID: 4b2457a2fa914b708d2f44fba9b4aa13
+Generated: 2026-04-10 19:33:45
+Overall Risk: medium
+Confidence: medium
+
+No vulnerability candidates were identified in this run.
+
+High Value Findings
+-
+- Initial target: 127.0.0.1
+- Seeded URLs: http://127.0.0.1, https://127.0.0.1
+- Open TCP port 3306 running mysql.
+
+Risk Signals
+-
+- nuclei command timed out; visibility may be incomplete.
+- nuclei returned exit code -1.
+
+Recommended Next Steps
+-
+- Validate high-confidence findings with targeted manual checks.
+- Prioritize internet-facing assets and sensitive endpoints first.
+- Run authenticated validation for confirmed candidates where in scope.
