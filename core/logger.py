@@ -1,13 +1,20 @@
+"""Structured logging utilities for the recon agent."""
+
+from __future__ import annotations
+
 import logging
 from pathlib import Path
+from typing import Optional
 
 
-def build_logger(name="autonomous_red_team", level=logging.INFO, log_file=None):
+def build_logger(name: str = "autonomous_recon", level: int = logging.INFO, log_file: Optional[str] = None) -> logging.Logger:
+    """Create and return a configured logger that logs to console and file."""
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
 
     logger.setLevel(level)
+    logger.propagate = False
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
 
     stream_handler = logging.StreamHandler()
