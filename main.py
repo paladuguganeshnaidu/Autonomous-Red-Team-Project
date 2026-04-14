@@ -1,5 +1,6 @@
 # main.py
 import os
+import random
 import re
 import sys
 import time
@@ -9,9 +10,32 @@ import config
 from decision_engine import DecisionEngine
 from executor import Executor
 from memory import Memory
+from passive_recon import PassiveRecon
 from recon import ReconAgent
 from reporter import Reporter
 from trace_logger import TraceLogger
+
+
+class _NoopRAG:
+    enabled = False
+    last_error = ""
+    vector_store = None
+
+    @staticmethod
+    def bootstrap():
+        return 0
+
+    @staticmethod
+    def ingest_iteration(*args, **kwargs):
+        return 0
+
+    @staticmethod
+    def ingest_final(*args, **kwargs):
+        return 0
+
+    @staticmethod
+    def retrieve_for_stage(*args, **kwargs):
+        return {"query": "", "results": [], "context": ""}
 
 
 def _append_unique(items, value):
@@ -195,6 +219,25 @@ def _update_scan_state(scan_state, plan, command_results, analysis):
         scan_state["preferred_web_url"] = scan_state["urls"][0]
 
 
+def _sleep_with_jitter(base_delay, use_jitter):
+    delay = max(base_delay, 0)
+    if config.ENABLE_JITTER and use_jitter:
+        delay += random.uniform(config.JITTER_MIN_SEC, config.JITTER_MAX_SEC)
+    if delay > 0:
+        time.sleep(delay)
+
+
+def _snapshot_metrics(scan_state):
+    return {
+        "findings": len(scan_state.get("findings", [])),
+        "risk_signals": len(scan_state.get("risk_signals", [])),
+        "urls": len(scan_state.get("urls", [])),
+        "hosts": len(scan_state.get("additional_hosts", [])),
+        "open_ports": len(scan_state.get("open_ports", [])),
+        "vulns": len(scan_state.get("vulnerability_candidates", [])),
+    }
+
+
 def main():
     if len(sys.argv) < 2:
         target = input("Enter target URL/domain/IP: ").strip()
@@ -221,7 +264,22 @@ def main():
             "tool_timeout": config.TOOL_TIMEOUT,
         },
     )
-    ai = DecisionEngine(trace_logger=trace_logger)
+    rag_loop = _NoopRAG()
+    try:
+        from rag.update_loop import RAGUpdateLoop
+
+        rag_loop = RAGUpdateLoop(trace_logger=trace_logger)
+    except Exception as exc:
+        print(f"[WARN] RAG disabled: {exc}")
+
+    if rag_loop.enabled:
+        if rag_loop.last_error:
+            print(f"[WARN] RAG initialized in degraded mode: {rag_loop.last_error}")
+        bootstrap_added = rag_loop.bootstrap()
+        if bootstrap_added > 0:
+            print(f"[INFO] RAG bootstrap indexed {bootstrap_added} new chunks.")
+
+    ai = DecisionEngine(trace_logger=trace_logger, rag_manager=rag_loop)
     executor = Executor(timeout=config.TOOL_TIMEOUT, trace_logger=trace_logger)
     trace_logger.log_event("run_started", target=target, network_target=recon.network_target)
 
@@ -285,6 +343,7 @@ def main():
     print(f"Fixed iterations: {config.MAX_ITERATIONS}\n")
 
     iteration_records = []
+    passive = PassiveRecon()
 
     for iteration in range(1, config.MAX_ITERATIONS + 1):
         print(f"{'-' * 56}")
@@ -294,56 +353,106 @@ def main():
         history = memory.get_history(run_id, limit=config.HISTORY_LIMIT)
         usage_summary = memory.get_tool_usage_summary(run_id)
 
-        plan = ai.plan_iteration_commands(
-            scan_state=scan_state,
-            history=history,
-            usage_summary=usage_summary,
-            iteration=iteration,
-            max_iterations=config.MAX_ITERATIONS,
-        )
-
-        commands = plan.get("commands", [])
-        print(f"Goal: {plan.get('iteration_goal', '')}")
-        print(f"Reasoning: {plan.get('reasoning', '')}")
-        print(f"Planned commands: {len(commands)}")
-        if plan.get("used_fallback"):
-            print("[INFO] Using fallback command plan for this iteration.")
-
-        if not commands:
-            print("[ERROR] Planner produced no runnable commands.")
-            trace_logger.log_event(
-                "iteration_skipped",
+        passive_only = False
+        if iteration == 1 and config.PASSIVE_RECON_FIRST and config.PASSIVE_RECON_ENABLED:
+            print("[INFO] Passive recon first iteration.")
+            plan = {
+                "iteration_goal": "Passive reconnaissance only.",
+                "reasoning": "Collect passive intelligence before touching the target directly.",
+                "commands": [],
+                "used_fallback": True,
+                "llm_error": "",
+            }
+            command_results, analysis = passive.run(target)
+            for item in command_results:
+                item["objective"] = "Passive intelligence collection."
+                item["command_index"] = 0
+                trace_logger.log_event(
+                    "command_execution",
+                    iteration=iteration,
+                    command_index=0,
+                    tool=item.get("tool"),
+                    objective=item.get("objective"),
+                    llm_command_raw=item.get("command"),
+                    command_executed=item.get("command"),
+                    started_at=item.get("timestamp"),
+                    finished_at=item.get("timestamp"),
+                    exit_code=item.get("exit_code"),
+                    duration_sec=item.get("duration_sec"),
+                    timed_out=item.get("timed_out"),
+                    timeout_sec=item.get("timeout_sec"),
+                    stdout="",
+                    stderr="",
+                    output_preview=item.get("output", ""),
+                    analysis_input=item.get("analysis_input", ""),
+                    raw_output_size=item.get("raw_output_size", 0),
+                )
+            passive_only = True
+        else:
+            plan = ai.plan_iteration_commands(
+                scan_state=scan_state,
+                history=history,
+                usage_summary=usage_summary,
                 iteration=iteration,
-                reason=plan.get("llm_error", "Planner produced no runnable commands."),
-                used_fallback=plan.get("used_fallback", False),
+                max_iterations=config.MAX_ITERATIONS,
             )
-            if config.REQUIRE_LLM and not config.ALLOW_LLM_FALLBACK:
-                print("Stopping because REQUIRE_LLM is enabled.")
-                break
-            print("Continuing with next iteration in fallback-compatible mode.")
-            continue
 
-        command_results = []
-        for index, spec in enumerate(commands, start=1):
-            tool = spec.get("tool", "unknown")
-            command = spec.get("command", "")
-            llm_command = spec.get("llm_command_raw", command)
-            objective = spec.get("objective", "")
-            timeout_sec = spec.get("timeout_sec", config.TOOL_TIMEOUT)
+        if not passive_only:
+            commands = plan.get("commands", [])
+            print(f"Goal: {plan.get('iteration_goal', '')}")
+            print(f"Reasoning: {plan.get('reasoning', '')}")
+            print(f"Planned commands: {len(commands)}")
+            if plan.get("used_fallback"):
+                print("[INFO] Using fallback command plan for this iteration.")
 
-            print(f"\n[COMMAND {index}/{len(commands)}] {tool.upper()} - {objective}")
-            result = executor.run(
-                command,
-                tool,
-                timeout=timeout_sec,
-                iteration=iteration,
-                command_index=index,
-                objective=objective,
-                llm_command=llm_command,
-            )
-            command_results.append(result)
+            if not commands:
+                print("[ERROR] Planner produced no runnable commands.")
+                trace_logger.log_event(
+                    "iteration_skipped",
+                    iteration=iteration,
+                    reason=plan.get("llm_error", "Planner produced no runnable commands."),
+                    used_fallback=plan.get("used_fallback", False),
+                )
+                if config.REQUIRE_LLM and not config.ALLOW_LLM_FALLBACK:
+                    print("Stopping because REQUIRE_LLM is enabled.")
+                    break
+                print("Continuing with next iteration in fallback-compatible mode.")
+                continue
 
-        analysis = ai.analyze_iteration(scan_state, plan, command_results, iteration)
+            command_results = []
+            for index, spec in enumerate(commands, start=1):
+                tool = spec.get("tool", "unknown")
+                command = spec.get("command", "")
+                llm_command = spec.get("llm_command_raw", command)
+                objective = spec.get("objective", "")
+                timeout_sec = spec.get("timeout_sec", config.TOOL_TIMEOUT)
+
+                print(f"\n[COMMAND {index}/{len(commands)}] {tool.upper()} - {objective}")
+                result = executor.run(
+                    command,
+                    tool,
+                    timeout=timeout_sec,
+                    iteration=iteration,
+                    command_index=index,
+                    objective=objective,
+                    llm_command=llm_command,
+                )
+                command_results.append(result)
+                if config.JITTER_BETWEEN_COMMANDS:
+                    _sleep_with_jitter(0, True)
+
+            filtered_results = command_results
+            if config.VERIFY_BEFORE_LLM:
+                filtered_results = [
+                    item for item in command_results
+                    if item.get("verification", {}).get("useful")
+                ]
+            analysis = ai.analyze_iteration(scan_state, plan, filtered_results, iteration)
+        else:
+            print(f"Goal: {plan.get('iteration_goal', '')}")
+            print(f"Reasoning: {plan.get('reasoning', '')}")
+
+        before_metrics = _snapshot_metrics(scan_state)
 
         print("\n[ITERATION ANALYSIS]")
         print(analysis.get("summary", "No summary produced."))
@@ -355,6 +464,18 @@ def main():
             print(f"Next focus: {analysis.get('next_focus')}")
 
         _update_scan_state(scan_state, plan, command_results, analysis)
+        after_metrics = _snapshot_metrics(scan_state)
+        deltas = {key: after_metrics[key] - before_metrics[key] for key in before_metrics}
+        verified_useful = sum(
+            1 for item in command_results if item.get("verification", {}).get("useful")
+        )
+        dead_end = all(value <= 0 for value in deltas.values()) and verified_useful == 0
+        if dead_end:
+            scan_state["dead_end_count"] = scan_state.get("dead_end_count", 0) + 1
+            scan_state["dead_end_notes"] = "No new findings, hosts, URLs, ports, or useful outputs."
+        else:
+            scan_state["dead_end_notes"] = ""
+            scan_state["dead_end_count"] = 0
         trace_logger.log_event(
             "iteration_summary",
             iteration=iteration,
@@ -379,6 +500,17 @@ def main():
 
         memory.store_state_snapshot(run_id, iteration, scan_state)
 
+        if rag_loop.enabled:
+            rag_loop.ingest_iteration(
+                target=target,
+                run_id=run_id,
+                iteration=iteration,
+                scan_state=scan_state,
+                plan=plan,
+                command_results=command_results,
+                analysis=analysis,
+            )
+
         iteration_records.append(
             {
                 "iteration": iteration,
@@ -396,10 +528,20 @@ def main():
         )
 
         if iteration < config.MAX_ITERATIONS:
-            time.sleep(config.DELAY_BETWEEN_ACTIONS)
+            _sleep_with_jitter(config.DELAY_BETWEEN_ACTIONS, config.JITTER_BETWEEN_ITERATIONS)
 
     print("\n[FINAL] Building complete vulnerability-focused summary...")
     final_assessment = ai.build_final_assessment(target, scan_state, iteration_records)
+
+    if rag_loop.enabled:
+        rag_loop.ingest_final(
+            target=target,
+            run_id=run_id,
+            scan_state=scan_state,
+            final_assessment=final_assessment,
+            iteration_records=iteration_records,
+        )
+
     memory.complete_run(run_id, final_assessment)
     trace_logger.complete(final_assessment)
 
@@ -427,10 +569,36 @@ def main():
     print("Database: redteam.db")
     print(f"Markdown report: {markdown_path}")
     print(f"Vulnerabilities text: {vulns_txt_path}")
+    if rag_loop.enabled and rag_loop.vector_store is not None:
+        print(f"RAG records indexed: {rag_loop.vector_store.count}")
     if trace_logger.path:
         print(f"Trace JSON: {trace_logger.path}")
 
     memory.close()
+
+    if config.ENCRYPTION_ENABLED and config.ENCRYPT_OUTPUTS:
+        try:
+            from secure_storage import encrypt_file
+            to_encrypt = [
+                "redteam.db",
+                markdown_path,
+                vulns_txt_path,
+                trace_logger.path,
+            ]
+            encrypted_paths = []
+            for path in to_encrypt:
+                if path:
+                    encrypted_paths.append(encrypt_file(path, delete_original=config.CLEANUP_AFTER_REPORT))
+            print(f"Encrypted outputs: {', '.join([p for p in encrypted_paths if p])}")
+        except Exception as exc:
+            print(f"[WARN] Encryption failed: {exc}")
+
+    if config.CLEANUP_AFTER_REPORT and not config.ENCRYPTION_ENABLED:
+        for path in [trace_logger.path, markdown_path, vulns_txt_path, "redteam.db"]:
+            if path and os.path.exists(path):
+                os.remove(path)
+        print("Cleanup completed.")
+
 
 
 if __name__ == "__main__":

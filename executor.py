@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 
 import config
+from result_validator import validate_result
 
 
 class Executor:
@@ -66,6 +67,7 @@ class Executor:
                 "timed_out": False,
                 "timeout_sec": effective_timeout,
             }
+            entry["verification"] = validate_result(tool_name, analysis_input)
             self.log.append(entry)
             if self.trace_logger:
                 self.trace_logger.log_event(
@@ -124,6 +126,7 @@ class Executor:
                 "timeout_sec": effective_timeout,
                 "error": f"Command timed out after {effective_timeout}s",
             }
+            entry["verification"] = validate_result(tool_name, analysis_input)
             self.log.append(entry)
             if self.trace_logger:
                 self.trace_logger.log_event(
@@ -172,6 +175,7 @@ class Executor:
                 "timeout_sec": effective_timeout,
                 "error": str(e),
             }
+            entry["verification"] = {"useful": False, "signals": []}
             self.log.append(entry)
             if self.trace_logger:
                 self.trace_logger.log_event(

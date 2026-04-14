@@ -11,13 +11,27 @@ import config
 
 
 class DecisionEngine:
-    def __init__(self, trace_logger=None):
+    def __init__(self, trace_logger=None, rag_manager=None):
         self.url = config.OLLAMA_URL
         self.model = config.OLLAMA_MODEL
         self.last_error = ""
         self.trace_logger = trace_logger
+        self.rag_manager = rag_manager
         self._last_llm_meta = {}
         self._llm_bypass_active = False
+
+    def _get_rag_context(self, stage, scan_state, plan=None, analysis=None, command_results=None):
+        if not self.rag_manager or not getattr(self.rag_manager, "enabled", False):
+            return {"query": "", "results": [], "context": ""}
+
+        payload = self.rag_manager.retrieve_for_stage(
+            scan_state=scan_state,
+            stage=stage,
+            plan=plan,
+            analysis=analysis,
+            command_results=command_results,
+        )
+        return payload or {"query": "", "results": [], "context": ""}
 
     def health_check(self):
         prompt = 'Return ONLY JSON: {"ready": true}'
@@ -32,12 +46,17 @@ class DecisionEngine:
         return True, "LLM is reachable and returning structured output."
 
     def plan_iteration_commands(self, scan_state, history, usage_summary, iteration, max_iterations):
+        rag_payload = self._get_rag_context(
+            stage="iteration_plan",
+            scan_state=scan_state,
+        )
         prompt = self._build_iteration_plan_prompt(
             scan_state=scan_state,
             history=history,
             usage_summary=usage_summary,
             iteration=iteration,
             max_iterations=max_iterations,
+            retrieved_context=rag_payload.get("context", ""),
         )
         raw = self._call_ollama(
             prompt,
@@ -47,6 +66,8 @@ class DecisionEngine:
                 "scan_state": scan_state if config.TRACE_CAPTURE_SCAN_STATE else {},
                 "history": history,
                 "usage_summary": usage_summary,
+                "rag_query": rag_payload.get("query", ""),
+                "rag_results": rag_payload.get("results", [])[:5],
             },
         )
         parsed = self._extract_json(raw, stage="iteration_plan", iteration=iteration)
@@ -86,7 +107,22 @@ class DecisionEngine:
         heuristic = self._heuristic_batch_analysis(scan_state, plan, command_results, iteration)
         combined_output = self._build_combined_output(command_results)
 
-        prompt = self._build_analysis_prompt(scan_state, plan, combined_output, heuristic, iteration)
+        rag_payload = self._get_rag_context(
+            stage="iteration_analysis",
+            scan_state=scan_state,
+            plan=plan,
+            analysis=heuristic,
+            command_results=command_results,
+        )
+
+        prompt = self._build_analysis_prompt(
+            scan_state,
+            plan,
+            combined_output,
+            heuristic,
+            iteration,
+            retrieved_context=rag_payload.get("context", ""),
+        )
         raw = self._call_ollama(
             prompt,
             stage="iteration_analysis",
@@ -96,6 +132,8 @@ class DecisionEngine:
                 "plan": plan,
                 "heuristic": heuristic,
                 "combined_output": combined_output if config.TRACE_CAPTURE_ANALYSIS_INPUT else "",
+                "rag_query": rag_payload.get("query", ""),
+                "rag_results": rag_payload.get("results", [])[:5],
             },
         )
         parsed = self._extract_json(raw, stage="iteration_analysis", iteration=iteration)
@@ -151,7 +189,17 @@ class DecisionEngine:
         return result
 
     def build_final_assessment(self, target, scan_state, iteration_records):
-        prompt = self._build_final_prompt(target, scan_state, iteration_records)
+        rag_payload = self._get_rag_context(
+            stage="final_assessment",
+            scan_state=scan_state,
+            analysis={"summary": f"{len(iteration_records)} iteration records available."},
+        )
+        prompt = self._build_final_prompt(
+            target,
+            scan_state,
+            iteration_records,
+            retrieved_context=rag_payload.get("context", ""),
+        )
         raw = self._call_ollama(
             prompt,
             stage="final_assessment",
@@ -159,6 +207,8 @@ class DecisionEngine:
                 "target": target,
                 "scan_state": scan_state if config.TRACE_CAPTURE_SCAN_STATE else {},
                 "iteration_records": iteration_records,
+                "rag_query": rag_payload.get("query", ""),
+                "rag_results": rag_payload.get("results", [])[:5],
             },
         )
         parsed = self._extract_json(raw, stage="final_assessment")
@@ -501,8 +551,15 @@ class DecisionEngine:
                 command = f"{command} -Pn"
             if " -sV " not in f" {command} ":
                 command = f"{command} -sV"
+            if config.NMAP_TIMING_TEMPLATE:
+                timing_flag = f"-{config.NMAP_TIMING_TEMPLATE.lstrip('-')}"
+                if " -T" not in f" {command} ":
+                    command = f"{command} {timing_flag}"
             if network_target and network_target not in command:
                 command = f"{command} {network_target}"
+            if config.ENABLE_PROXY and config.PROXY_URL and config.PROXY_NMAP_FLAG:
+                if config.PROXY_NMAP_FLAG not in command:
+                    command = f"{command} {config.PROXY_NMAP_FLAG} {config.PROXY_URL}"
 
         elif tool == "subfinder":
             if not self._is_domain(target):
@@ -511,6 +568,9 @@ class DecisionEngine:
                 command = f"{command} -d {target}"
             if " -silent " not in f" {command} ":
                 command = f"{command} -silent"
+            if config.ENABLE_PROXY and config.PROXY_URL and config.PROXY_SUBFINDER_FLAG:
+                if f" {config.PROXY_SUBFINDER_FLAG} " not in f" {command} ":
+                    command = f"{command} {config.PROXY_SUBFINDER_FLAG} {config.PROXY_URL}"
 
         elif tool == "ffuf":
             if " -u " not in f" {command} ":
@@ -523,6 +583,9 @@ class DecisionEngine:
                 command = f"{command} -mc 200,204,301,302,307,401,403"
             if " -maxtime-job " not in f" {command} ":
                 command = f"{command} -maxtime-job 120"
+            if config.ENABLE_PROXY and config.PROXY_URL and config.PROXY_FFUF_FLAG:
+                if f" {config.PROXY_FFUF_FLAG} " not in f" {command} ":
+                    command = f"{command} {config.PROXY_FFUF_FLAG} {config.PROXY_URL}"
 
         elif tool == "nuclei":
             if " -u " not in f" {command} ":
@@ -531,6 +594,9 @@ class DecisionEngine:
                 command = f"{command} -silent"
             if " -severity " not in f" {command} ":
                 command = f"{command} -severity critical,high,medium"
+            if config.ENABLE_PROXY and config.PROXY_URL and config.PROXY_NUCLEI_FLAG:
+                if f" {config.PROXY_NUCLEI_FLAG} " not in f" {command} ":
+                    command = f"{command} {config.PROXY_NUCLEI_FLAG} {config.PROXY_URL}"
 
         return command
 
@@ -712,7 +778,10 @@ class DecisionEngine:
             "commands": normalized_commands,
         }
 
-    def _build_iteration_plan_prompt(self, scan_state, history, usage_summary, iteration, max_iterations):
+    def _build_iteration_plan_prompt(self, scan_state, history, usage_summary, iteration, max_iterations, retrieved_context=""):
+        dead_end_notes = scan_state.get("dead_end_notes", "")
+        dead_end_count = scan_state.get("dead_end_count", 0)
+        retrieved_block = retrieved_context or "No relevant retrieved context."
         return f"""
 You are the autonomous planning brain for reconnaissance.
 
@@ -728,6 +797,7 @@ Rules:
 - Each command must have tool, command, objective, timeout_sec.
 - Timeout should be between 30 and {config.MAX_COMMAND_TIMEOUT} seconds.
 - Prefer commands that increase evidence quality over noisy repetition.
+- If you see dead-end signals, pivot to a different surface or tool mix.
 
 Context:
 - Target: {scan_state.get('target')}
@@ -741,6 +811,8 @@ Context:
 - Previous focus queue: {scan_state.get('focus_queue', [])[-10:]}
 - History: {history[-config.HISTORY_LIMIT:]}
 - Tool usage summary: {usage_summary}
+- Dead-end signals: {dead_end_notes} (count={dead_end_count})
+- Retrieved context (top relevant prior evidence): {retrieved_block}
 - Iteration: {iteration}/{max_iterations}
 
 Placeholders you may use in commands:
@@ -765,7 +837,8 @@ Return exact JSON shape:
 }}
 """
 
-    def _build_analysis_prompt(self, scan_state, plan, combined_output, heuristic, iteration):
+    def _build_analysis_prompt(self, scan_state, plan, combined_output, heuristic, iteration, retrieved_context=""):
+        retrieved_block = retrieved_context or "No relevant retrieved context."
         return f"""
 You are analyzing results of an AI-planned reconnaissance batch.
 
@@ -775,6 +848,9 @@ Iteration goal: {plan.get('iteration_goal')}
 Planner reasoning: {plan.get('reasoning')}
 Heuristic pre-analysis:
 {heuristic}
+
+Retrieved context (top relevant prior evidence):
+{retrieved_block}
 
 Combined command output:
 {combined_output[:22000]}
@@ -802,7 +878,7 @@ Return ONLY JSON with this exact shape:
 Do not invent exploitation results. Use only evidence from the provided output.
 """
 
-    def _build_final_prompt(self, target, scan_state, iteration_records):
+    def _build_final_prompt(self, target, scan_state, iteration_records, retrieved_context=""):
         compact_iterations = []
         for item in iteration_records:
             compact_iterations.append(
@@ -834,6 +910,7 @@ Evidence context:
 - Consolidated risk signals: {scan_state.get('risk_signals', [])}
 - Consolidated vulnerability candidates: {scan_state.get('vulnerability_candidates', [])}
 - Iteration records: {compact_iterations}
+- Retrieved context (top relevant prior evidence): {retrieved_context or 'No relevant retrieved context.'}
 
 Return ONLY JSON:
 {{
