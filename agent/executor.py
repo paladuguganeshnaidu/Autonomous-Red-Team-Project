@@ -1,138 +1,182 @@
-import random
-import time
+"""Action executor that maps planner decisions to concrete tool calls."""
 
-from tools.http_probe import run_ffuf_scan
-from tools.http_probe import run_http_probe
-from tools.http_probe import run_whatweb_detect
+from __future__ import annotations
+
+from typing import Any, Callable, Dict
+from urllib.parse import urlparse
+
+from tools.dirsearch_tool import run_dirsearch
+from tools.httpx_tool import run_httpx_probe
 from tools.nmap_tool import run_nmap
 from tools.subdomain_tool import run_subdomain_enum
 
 
-class Executor:
-    def __init__(self, config, logger):
-        self.config = config
-        self.logger = logger
-        self._last_action_at = 0.0
-        self._ua_index = 0
+def execute_action(action: dict, config: Any) -> dict:
+    """Execute one planner action and return a structured JSON result."""
+    action_name = str(action.get("action", "")).strip().lower()
+    target = str(action.get("target", "")).strip()
 
-    def run_actions(self, actions):
-        results = []
+    if action_name in {"", "stop"}:
+        return {
+            "status": "skipped",
+            "action": action_name or "stop",
+            "target": target,
+            "data": {"message": "No executable action requested."},
+            "error": None,
+            "attempts": 0,
+        }
 
-        for index, action in enumerate(actions, start=1):
-            tool = action.get("tool", "")
-            params = action.get("params", {})
-            description = action.get("description", "")
-            self.logger.info("Executing step %s with tool=%s | %s", index, tool, description)
+    if action_name == "prioritize_exploit":
+        return {
+            "status": "success",
+            "action": action_name,
+            "target": target,
+            "data": {"message": "Exploit path prioritized for manual validation."},
+            "error": None,
+            "attempts": 1,
+        }
 
-            self._apply_stealth_delay()
+    handlers: Dict[str, Callable[[str, Any], Dict[str, Any]]] = {
+        "run_subfinder": _execute_subfinder,
+        "run_nmap": _execute_nmap,
+        "run_httpx": _execute_httpx,
+        "run_dirsearch": _execute_dirsearch,
+    }
 
-            attempts = max(0, int(self.config.command_retries)) + 1
-            result = None
-            for attempt in range(1, attempts + 1):
-                result = self._execute_one(tool, params)
-                result["attempt"] = attempt
+    handler = handlers.get(action_name)
+    if handler is None:
+        return {
+            "status": "failed",
+            "action": action_name,
+            "target": target,
+            "data": {},
+            "error": f"Unsupported action: {action_name}",
+            "attempts": 0,
+        }
 
-                if int(result.get("exit_code", -1)) == 0:
-                    break
+    retries = min(2, max(0, int(getattr(config, "command_retries", 2))))
+    max_attempts = retries + 1
 
-                if attempt < attempts:
-                    self.logger.warning(
-                        "Tool %s failed on attempt %s/%s: %s",
-                        tool,
-                        attempt,
-                        attempts,
-                        result.get("error", "unknown-error"),
-                    )
+    last_error = "Unknown execution failure"
+    last_data: Dict[str, Any] = {}
 
-            if result is None:
-                result = {
-                    "tool": tool,
-                    "exit_code": -1,
-                    "error": "Execution failed without result payload.",
-                    "raw_output": "",
-                }
-
-            results.append(result)
-            self.logger.info("Tool %s finished with exit_code=%s", tool, result.get("exit_code"))
-
-        return results
-
-    def _execute_one(self, tool, params):
+    for attempt in range(1, max_attempts + 1):
         try:
-            if tool == "nmap":
-                return run_nmap(
-                    target=params.get("target", ""),
-                    nmap_path=self.config.nmap_path,
-                    timeout=self.config.command_timeout,
-                )
-
-            if tool == "subdomain":
-                return run_subdomain_enum(
-                    domain=params.get("domain", ""),
-                    subfinder_path=self.config.subfinder_path,
-                    timeout=self.config.command_timeout,
-                )
-
-            if tool == "http_probe":
-                return run_http_probe(
-                    urls=params.get("urls", []),
-                    httpx_path=self.config.httpx_path,
-                    timeout=self.config.request_timeout,
-                    user_agent=self._next_user_agent(),
-                )
-
-            if tool == "ffuf":
-                return run_ffuf_scan(
-                    base_url=params.get("base_url", ""),
-                    ffuf_path=self.config.ffuf_path,
-                    wordlist=self.config.ffuf_wordlist,
-                    match_codes=self.config.ffuf_match_codes,
-                    timeout=self.config.command_timeout,
-                    max_time=self.config.ffuf_max_time,
-                    rate=self.config.ffuf_rate,
-                )
-
-            if tool == "whatweb":
-                return run_whatweb_detect(
-                    urls=params.get("urls", []),
-                    whatweb_path=self.config.whatweb_path,
-                    timeout=self.config.command_timeout,
-                )
-
-            return {
-                "tool": tool,
-                "exit_code": -1,
-                "error": f"Unsupported tool: {tool}",
-                "raw_output": "",
-            }
+            data = handler(target, config)
         except Exception as exc:
-            return {
-                "tool": tool,
+            data = {
+                "tool": action_name,
                 "exit_code": -1,
-                "error": f"Executor exception: {exc}",
-                "raw_output": "",
+                "error": str(exc),
             }
 
-    def _next_user_agent(self):
-        user_agents = self.config.user_agents or ["AutonomousRedTeam/1.0"]
-        self._ua_index = (self._ua_index + 1) % len(user_agents)
-        return user_agents[self._ua_index]
+        if _tool_succeeded(data):
+            return {
+                "status": "success",
+                "action": action_name,
+                "target": target,
+                "data": data,
+                "error": None,
+                "attempts": attempt,
+            }
 
-    def _apply_stealth_delay(self):
-        now = time.time()
+        last_data = data
+        last_error = str(data.get("error", "Tool returned no success signals."))
 
-        rate = float(self.config.rate_limit_per_sec)
-        if rate > 0:
-            min_interval = 1.0 / rate
-            elapsed = now - self._last_action_at
-            if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
+    return {
+        "status": "failed",
+        "action": action_name,
+        "target": target,
+        "data": last_data,
+        "error": last_error,
+        "attempts": max_attempts,
+    }
 
-        if self.config.enable_jitter:
-            jitter_min = float(self.config.jitter_min_sec)
-            jitter_max = float(self.config.jitter_max_sec)
-            if jitter_max < jitter_min:
-                jitter_min, jitter_max = jitter_max, jitter_min
-            time.sleep(random.uniform(jitter_min, jitter_max))
 
-        self._last_action_at = time.time()
+def _execute_subfinder(target: str, config: Any) -> Dict[str, Any]:
+    """Execute subdomain enumeration for the requested target."""
+    return run_subdomain_enum(
+        domain=target,
+        subfinder_path=getattr(config, "subfinder_path", "subfinder"),
+        timeout=int(getattr(config, "command_timeout", 120)),
+    )
+
+
+def _execute_nmap(target: str, config: Any) -> Dict[str, Any]:
+    """Execute nmap service discovery for the requested target."""
+    return run_nmap(
+        target=target,
+        nmap_path=getattr(config, "nmap_path", "nmap"),
+        timeout=int(getattr(config, "command_timeout", 120)),
+    )
+
+
+def _execute_httpx(target: str, config: Any) -> Dict[str, Any]:
+    """Execute HTTP probing and technology checks for a web target."""
+    normalized_url = _normalize_web_target(target)
+    user_agents = getattr(config, "user_agents", []) or ["AutonomousReconAgent/1.0"]
+
+    return run_httpx_probe(
+        urls=[normalized_url],
+        httpx_path=getattr(config, "httpx_path", "httpx"),
+        timeout=int(getattr(config, "request_timeout", 10)),
+        user_agent=user_agents[0],
+    )
+
+
+def _execute_dirsearch(target: str, config: Any) -> Dict[str, Any]:
+    """Execute directory/content discovery for a web target."""
+    normalized_url = _normalize_web_target(target)
+
+    return run_dirsearch(
+        base_url=normalized_url,
+        ffuf_path=getattr(config, "ffuf_path", "ffuf"),
+        wordlist=getattr(config, "dirsearch_wordlist", ""),
+        match_codes=getattr(config, "dirsearch_match_codes", "200,204,301,302,307,401,403"),
+        timeout=int(getattr(config, "command_timeout", 120)),
+        max_time=int(getattr(config, "dirsearch_max_time", 90)),
+        rate=int(getattr(config, "dirsearch_rate", 25)),
+    )
+
+
+def _normalize_web_target(target: str) -> str:
+    """Normalize any host/URL target into a valid URL string for web tools."""
+    clean = str(target or "").strip()
+    if not clean:
+        return ""
+
+    if clean.startswith("http://") or clean.startswith("https://"):
+        return clean.rstrip("/")
+
+    if "://" in clean:
+        parsed = urlparse(clean)
+        host = parsed.hostname or clean
+        return f"https://{host}".rstrip("/")
+
+    host = clean.split("/")[0]
+    return f"https://{host}".rstrip("/")
+
+
+def _tool_succeeded(data: Dict[str, Any]) -> bool:
+    """Check if tool output contains successful execution signals."""
+    raw_exit_code = data.get("exit_code", -1)
+    exit_code = -1 if raw_exit_code is None else int(raw_exit_code)
+    if exit_code == 0:
+        return True
+
+    if data.get("subdomains"):
+        return True
+
+    if data.get("ports"):
+        return True
+
+    responses = data.get("responses", [])
+    if isinstance(responses, list):
+        for response in responses:
+            if int(response.get("status_code", 0) or 0) > 0:
+                return True
+
+    if data.get("findings"):
+        return True
+
+    return False

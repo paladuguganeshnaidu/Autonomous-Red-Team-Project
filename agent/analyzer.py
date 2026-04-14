@@ -1,213 +1,266 @@
-import re
+"""Result analyzer that merges tool outputs and enriches findings with LLM intelligence."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
+
+from core.llm import analyze_with_llm
 
 
-SECURITY_HEADERS = [
-    "Content-Security-Policy",
-    "Strict-Transport-Security",
-    "X-Frame-Options",
-]
+SENSITIVE_PATH_MARKERS = (
+    ".git",
+    ".env",
+    "admin",
+    "backup",
+    "config",
+    "db",
+)
 
 
-class Analyzer:
-    def analyze(self, results, state):
-        findings = []
-        vulnerabilities = []
-        ports = []
-        services = []
-        subdomains = []
-        successful_tools = 0
+def analyze_result(result: dict, state: dict, config: Optional[Any] = None) -> dict:
+    """Analyze one execution result, update state, and optionally enrich with LLM intelligence."""
+    normalized = _normalize_state(state)
 
-        for result in results:
-            tool = result.get("tool", "")
-            if int(result.get("exit_code", -1)) == 0:
-                successful_tools += 1
+    action_name = str(result.get("action", "")).strip().lower()
+    status = str(result.get("status", "failed")).strip().lower()
+    data = result.get("data", {}) if isinstance(result.get("data", {}), dict) else {}
 
-            if result.get("error"):
-                findings.append(f"{tool} error: {result.get('error')}")
+    before_snapshot = _state_counts(normalized)
+    before_services = len(normalized["services"])
+    before_endpoints = len(normalized["endpoints"])
 
-            if tool == "nmap":
-                parsed_ports = result.get("ports", [])
-                if parsed_ports:
-                    for item in parsed_ports:
-                        port = str(item.get("port", "")).strip()
-                        service = str(item.get("service", "unknown")).strip()
-                        if port:
-                            ports.append(port)
-                            services.append({"port": port, "service": service})
-                    findings.append(f"Open ports detected: {', '.join(self._dedupe(ports))}")
-                else:
-                    fallback_ports = self._extract_open_ports(result.get("raw_output", ""))
-                    ports.extend(fallback_ports)
-                    if fallback_ports:
-                        findings.append(f"Open ports detected: {', '.join(fallback_ports)}")
+    if action_name == "run_subfinder" and status == "success":
+        _merge_subdomains(normalized, data)
 
-            if tool == "subdomain":
-                discovered = result.get("subdomains", [])
-                subdomains.extend(discovered)
-                if discovered:
-                    findings.append(f"Subdomains discovered: {', '.join(discovered[:10])}")
+    if action_name == "run_nmap" and status == "success":
+        _merge_nmap_data(normalized, data)
 
-            if tool == "http_probe":
-                for response in result.get("responses", []):
-                    missing = response.get("missing_headers", [])
-                    status_code = int(response.get("status_code", 0) or 0)
-                    has_transport_error = bool(response.get("error"))
+    if action_name == "run_httpx" and status == "success":
+        _merge_httpx_data(normalized, data)
 
-                    if missing and not has_transport_error and status_code > 0:
-                        vulnerabilities.append(
-                            {
-                                "title": "Missing security headers",
-                                "severity": "medium",
-                                "asset": response.get("url", ""),
-                                "evidence": f"Missing: {', '.join(missing)}",
-                                "recommendation": "Configure CSP, HSTS, and X-Frame-Options headers.",
-                            }
-                        )
+    if action_name == "run_dirsearch" and status == "success":
+        _merge_dirsearch_data(normalized, data)
 
-                    if status_code in {200, 301, 302}:
-                        findings.append(f"Reachable web endpoint: {response.get('url', '')} [{status_code}]")
+    normalized["subdomains"] = _dedupe_str_list(normalized["subdomains"])
+    normalized["ports"] = _dedupe_str_list(normalized["ports"])
+    normalized["technologies"] = _dedupe_str_list(normalized["technologies"])
+    normalized["endpoints"] = _dedupe_str_list(normalized["endpoints"])
+    normalized["services"] = _dedupe_dict_list(normalized["services"], ["host", "port", "service"])
+    normalized["vulnerabilities"] = _dedupe_dict_list(normalized["vulnerabilities"], ["title", "asset", "evidence"])
 
-                    if response.get("error"):
-                        findings.append(f"HTTP probe error on {response.get('url', '')}: {response.get('error')}")
+    new_services_found = len(normalized["services"]) > before_services
+    new_endpoints_found = len(normalized["endpoints"]) > before_endpoints
 
-            if tool == "ffuf":
-                for hit in result.get("findings", []):
-                    path = str(hit.get("path", "")).lower()
-                    status_code = int(hit.get("status", 0) or 0)
+    if config is not None and (new_services_found or new_endpoints_found):
+        llm_output = analyze_with_llm(normalized, config)
+        llm_vulns = llm_output.get("vulnerabilities", []) if isinstance(llm_output, dict) else []
 
-                    if status_code in {200, 401, 403}:
-                        findings.append(f"Potential sensitive path: {hit.get('url', '')} [{status_code}]")
+        if isinstance(llm_vulns, list) and llm_vulns:
+            normalized["vulnerabilities"].extend(llm_vulns)
+            normalized["vulnerabilities"] = _dedupe_dict_list(
+                normalized["vulnerabilities"],
+                ["title", "asset", "evidence"],
+            )
 
-                    if ".git/config" in path and status_code == 200:
-                        vulnerabilities.append(
-                            {
-                                "title": "Exposed git metadata",
-                                "severity": "critical",
-                                "asset": hit.get("url", ""),
-                                "evidence": "Accessible .git/config via HTTP.",
-                                "recommendation": "Block repository internals and remove exposed .git directory from web root.",
-                            }
-                        )
+        next_actions = llm_output.get("next_actions", []) if isinstance(llm_output, dict) else []
+        if isinstance(next_actions, list) and next_actions:
+            normalized["history"].append(
+                {
+                    "timestamp": _utc_now_iso(),
+                    "type": "llm-next-actions",
+                    "next_actions": [str(item).strip() for item in next_actions if str(item).strip()],
+                }
+            )
 
-            if tool == "whatweb":
-                fingerprints = result.get("fingerprints", [])
-                for fp in fingerprints:
-                    tech = fp.get("tech", [])
-                    if tech:
-                        findings.append(f"Tech fingerprint {fp.get('url', '')}: {', '.join(tech[:6])}")
+    after_snapshot = _state_counts(normalized)
+    no_new_data = before_snapshot == after_snapshot
 
-        ports = self._dedupe(ports)
-        services = self._dedupe_dicts(services, ["port", "service"])
-        subdomains = self._dedupe(subdomains)
-        vulnerabilities = self._dedupe_dicts(vulnerabilities, ["title", "asset", "evidence"])
-        findings = self._dedupe(findings)
-
-        risk_score = self._risk_score(vulnerabilities)
-        confidence_score = self._confidence_score(results, successful_tools, findings, vulnerabilities)
-        risk_level = self._risk_level_from_score(risk_score)
-
-        stop_recommended = any(v.get("severity") == "critical" for v in vulnerabilities)
-        stop_reason = "Critical vulnerability identified." if stop_recommended else ""
-
-        return {
-            "summary": f"Processed {len(results)} tool results.",
-            "findings": findings,
-            "vulnerabilities": vulnerabilities,
-            "subdomains": subdomains,
-            "ports": ports,
-            "services": services,
-            "risk_level": risk_level,
-            "risk_score": risk_score,
-            "confidence_score": confidence_score,
-            "stop_recommended": stop_recommended,
-            "stop_reason": stop_reason,
-            "next_action_hint": "Continue iteration" if state.get("current_iteration", 0) < 4 else "Finalize report",
+    normalized["history"].append(
+        {
+            "timestamp": _utc_now_iso(),
+            "type": "action-result",
+            "action": action_name,
+            "status": status,
+            "error": result.get("error"),
+            "attempts": int(result.get("attempts", 0) or 0),
+            "no_new_data": no_new_data,
+            "new_services_found": new_services_found,
+            "new_endpoints_found": new_endpoints_found,
+            "counts": after_snapshot,
         }
+    )
 
-    def build_final_summary(self, state):
-        all_vulns = []
-        for item in state.get("iterations", []):
-            all_vulns.extend(item.get("analysis", {}).get("vulnerabilities", []))
+    if len(normalized["history"]) > 500:
+        normalized["history"] = normalized["history"][-500:]
 
-        risk_score = self._risk_score(all_vulns)
-        overall_risk = self._risk_level_from_score(risk_score)
-        confidence_score = float(state.get("scores", {}).get("confidence_score", 0.0))
+    return normalized
 
-        return {
-            "target": state.get("target", ""),
-            "run_id": state.get("run_id", ""),
-            "total_iterations": len(state.get("iterations", [])),
-            "total_findings": sum(len(i.get("analysis", {}).get("findings", [])) for i in state.get("iterations", [])),
-            "total_vulnerabilities": len(all_vulns),
-            "overall_risk": overall_risk,
-            "risk_score": risk_score,
-            "confidence_score": confidence_score,
-            "stop_reason": state.get("stop_reason", ""),
-        }
 
-    @staticmethod
-    def _extract_open_ports(raw_output):
-        ports = []
-        for match in re.finditer(r"(\d{1,5})/(tcp|udp)\s+open", raw_output or ""):
-            ports.append(match.group(1))
-        return ports
+def _normalize_state(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize shared state to required schema and safe list types."""
+    normalized: Dict[str, Any] = {
+        "target": str(state.get("target", "")).strip(),
+        "subdomains": _dedupe_str_list(state.get("subdomains", [])),
+        "ports": _dedupe_str_list(state.get("ports", [])),
+        "services": state.get("services", []) if isinstance(state.get("services", []), list) else [],
+        "technologies": _dedupe_str_list(state.get("technologies", [])),
+        "endpoints": _dedupe_str_list(state.get("endpoints", [])),
+        "vulnerabilities": state.get("vulnerabilities", []) if isinstance(state.get("vulnerabilities", []), list) else [],
+        "actions_taken": state.get("actions_taken", []) if isinstance(state.get("actions_taken", []), list) else [],
+        "action_history": state.get("action_history", []) if isinstance(state.get("action_history", []), list) else [],
+        "history": state.get("history", []) if isinstance(state.get("history", []), list) else [],
+    }
+    return normalized
 
-    @staticmethod
-    def _risk_score(vulns):
-        if not vulns:
-            return 0.1
-        weights = {
-            "critical": 1.0,
-            "high": 0.8,
-            "medium": 0.6,
-            "low": 0.3,
-            "info": 0.1,
-        }
-        total = 0.0
-        for vuln in vulns:
-            severity = str(vuln.get("severity", "low")).lower()
-            total += weights.get(severity, 0.3)
-        score = min(1.0, total / max(1, len(vulns)))
-        return round(score, 2)
 
-    @staticmethod
-    def _confidence_score(results, successful_tools, findings, vulnerabilities):
-        if not results:
-            return 0.0
+def _merge_subdomains(state: Dict[str, Any], data: Dict[str, Any]) -> None:
+    """Merge subdomain enumeration output into state."""
+    for subdomain in data.get("subdomains", []):
+        clean = str(subdomain).strip().lower()
+        if clean:
+            state["subdomains"].append(clean)
 
-        base = 0.35
-        base += min(0.3, successful_tools * 0.1)
-        base += min(0.2, len(findings) * 0.02)
-        base += min(0.15, len(vulnerabilities) * 0.05)
-        return round(min(0.98, base), 2)
 
-    @staticmethod
-    def _risk_level_from_score(risk_score):
-        score = float(risk_score)
-        if score >= 0.9:
-            return "critical"
-        if score >= 0.75:
-            return "high"
-        if score >= 0.45:
-            return "medium"
-        return "low"
+def _merge_nmap_data(state: Dict[str, Any], data: Dict[str, Any]) -> None:
+    """Merge nmap ports and services into state."""
+    for item in data.get("ports", []):
+        if not isinstance(item, dict):
+            continue
 
-    @staticmethod
-    def _dedupe(items):
-        unique = []
-        for item in items:
-            if item not in unique:
-                unique.append(item)
-        return unique
+        port = str(item.get("port", "")).strip()
+        service_name = str(item.get("service", "unknown")).strip().lower()
+        host = str(item.get("host", state.get("target", ""))).strip().lower()
 
-    @staticmethod
-    def _dedupe_dicts(items, fields):
-        unique = []
-        seen = set()
-        for item in items:
-            key = tuple(item.get(field) for field in fields)
-            if key in seen:
-                continue
-            seen.add(key)
-            unique.append(item)
-        return unique
+        if port:
+            state["ports"].append(port)
+            state["services"].append(
+                {
+                    "host": host,
+                    "port": port,
+                    "service": service_name,
+                }
+            )
+
+
+def _merge_httpx_data(state: Dict[str, Any], data: Dict[str, Any]) -> None:
+    """Merge HTTP probing output (technologies/services/endpoints) into state."""
+    for response in data.get("responses", []):
+        if not isinstance(response, dict):
+            continue
+
+        response_url = str(response.get("url", "")).strip()
+        host = _extract_host(response_url) or str(state.get("target", "")).strip().lower()
+        status_code = int(response.get("status_code", 0) or 0)
+
+        if response_url:
+            state["endpoints"].append(response_url)
+
+        if status_code > 0:
+            port = "443" if response_url.startswith("https://") else "80"
+            state["ports"].append(port)
+            state["services"].append(
+                {
+                    "host": host,
+                    "port": port,
+                    "service": "https" if port == "443" else "http",
+                }
+            )
+
+        webserver = str(response.get("webserver", "")).strip()
+        if webserver:
+            state["technologies"].append(webserver)
+
+        for tech in response.get("tech", []):
+            tech_clean = str(tech).strip()
+            if tech_clean:
+                state["technologies"].append(tech_clean)
+
+
+def _merge_dirsearch_data(state: Dict[str, Any], data: Dict[str, Any]) -> None:
+    """Merge directory discovery output and generate vulnerability hints."""
+    for finding in data.get("findings", []):
+        if not isinstance(finding, dict):
+            continue
+
+        url = str(finding.get("url", "")).strip()
+        path = str(finding.get("path", "")).strip().lower()
+        status_code = int(finding.get("status", 0) or 0)
+
+        if url:
+            state["endpoints"].append(url)
+
+        if status_code not in {200, 401, 403}:
+            continue
+
+        if any(marker in path for marker in SENSITIVE_PATH_MARKERS):
+            severity = "medium"
+            if ".git" in path or ".env" in path:
+                severity = "high"
+
+            state["vulnerabilities"].append(
+                {
+                    "title": "Sensitive path exposure candidate",
+                    "severity": severity,
+                    "asset": url,
+                    "target": _extract_host(url) or state.get("target", ""),
+                    "evidence": f"Discovered path '{path}' with status {status_code}",
+                    "recommendation": "Validate exposure and restrict access to sensitive endpoints.",
+                    "confidence": 0.6,
+                    "source": "rule",
+                }
+            )
+
+
+def _state_counts(state: Dict[str, Any]) -> Dict[str, int]:
+    """Build compact counts used to detect whether a loop added new data."""
+    return {
+        "subdomains": len(state.get("subdomains", [])),
+        "ports": len(state.get("ports", [])),
+        "services": len(state.get("services", [])),
+        "technologies": len(state.get("technologies", [])),
+        "endpoints": len(state.get("endpoints", [])),
+        "vulnerabilities": len(state.get("vulnerabilities", [])),
+    }
+
+
+def _utc_now_iso() -> str:
+    """Return current UTC timestamp in ISO format."""
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _extract_host(url: str) -> str:
+    """Extract host from URL and normalize it."""
+    try:
+        parsed = urlparse(url)
+        return (parsed.hostname or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _dedupe_str_list(values: Iterable[Any]) -> List[str]:
+    """Return ordered, deduplicated string values."""
+    unique: List[str] = []
+    for value in values or []:
+        clean = str(value).strip()
+        if clean and clean not in unique:
+            unique.append(clean)
+    return unique
+
+
+def _dedupe_dict_list(items: Iterable[Any], fields: List[str]) -> List[Dict[str, Any]]:
+    """Return ordered unique dictionaries keyed by selected fields."""
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        key = tuple(item.get(field) for field in fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique

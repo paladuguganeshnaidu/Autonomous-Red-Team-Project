@@ -1,4 +1,10 @@
 .venv/
+**pycache**/
 __pycache__/
-*.py[cod]
-redteam.db
+*.pyc
+logs/
+memory/
+reports/
+*.json
+*.log
+.env

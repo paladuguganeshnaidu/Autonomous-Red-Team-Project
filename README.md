@@ -1,211 +1,153 @@
-# Autonomous Red Team Project
+# Autonomous Red Team
 
-Autonomous, iteration-based reconnaissance and analysis framework for authorized security testing.
+Autonomous Red Team is a Python-based reconnaissance and vulnerability intelligence agent for authorized security assessments.
+It automates reconnaissance, prioritizes actions with a planner, enriches findings with LLM analysis, and produces a practical human-readable report.
 
-This project runs a structured 4-iteration loop where an LLM plans command batches, executes them, aggregates evidence, and refines the next step. The result is a clean intelligence report plus vulnerability candidates and remediation guidance.
+## Features
 
-## Why This Project
+- Autonomous planning loop (`planner -> executor -> analyzer`)
+- Recon collection for:
+  - subdomains
+  - open ports/services
+  - web endpoints/technology signals
+- LLM-assisted vulnerability reasoning (Ollama-compatible)
+- Actionable report generation with:
+  - vulnerability breakdown
+  - security weakness mapping
+  - practical next steps
+- Persistent session state for iterative runs
 
-- Reduces repetitive manual recon work.
-- Keeps run history isolated with a run ID.
-- Adds context-aware reasoning with local RAG.
-- Produces report-ready output for triage and follow-up testing.
+## Architecture (Text Diagram)
 
-## Safety and Scope
-
-Use this only on localhost systems or targets where you have explicit written authorization.
-
-- No destructive testing.
-- No unauthorized scanning.
-- Keep scans rate-limited and evidence-based.
-
-## Workflow at a Glance
-
-1. Initialize run context and normalize target.
-2. Perform passive recon first (when enabled).
-3. Let the LLM plan a bounded command batch.
-4. Execute commands with timeout and capture output.
-5. Analyze combined evidence and update scan state.
-6. Repeat for a fixed number of iterations (default: 4).
-7. Generate final markdown report + vulnerabilities text summary.
-
-## Core Capabilities
-
-- Autonomous multi-step scanning loop.
-- AI-planned command batches (not single-command chat loops).
-- In-scope host and URL filtering to prevent drift.
-- Passive-first recon mode.
-- Structured findings and risk signals per iteration.
-- Run-scoped memory in SQLite.
-- Optional local RAG context retrieval with FAISS.
-
-## Requirements
-
-- Windows
-- Python 3.9+
-- Ollama running locally
-- Installed external tools:
-	- nmap
-	- ffuf
-	- nuclei
-	- subfinder
-
-## Quick Start
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-ollama pull mistral
-python main.py
+```
+main.py
+  |
+  +--> core/config.py          (runtime configuration)
+  +--> core/logger.py          (session logging)
+  +--> core/state_manager.py   (state persistence)
+  +--> agent/planner.py        (next action selection)
+  +--> agent/executor.py       (tool execution wrapper)
+  +--> agent/analyzer.py       (state merge + vuln enrichment)
+  +--> tools/subdomain_tool.py (subfinder wrapper)
+  +--> tools/nmap_tool.py      (nmap wrapper)
+  +--> tools/httpx_tool.py     (httpx + header posture checks)
+  +--> tools/dirsearch_tool.py (ffuf-based directory discovery)
+  +--> reporting/report_generator.py (final actionable report)
 ```
 
-You can also provide a target directly:
+## Project Layout
 
-```bash
+```
+autonomous_red_team/
+|
+|-- core/
+|   |-- config.py
+|   |-- logger.py
+|   |-- llm.py
+|   |-- state_manager.py
+|
+|-- agent/
+|   |-- planner.py
+|   |-- executor.py
+|   |-- analyzer.py
+|
+|-- tools/
+|   |-- nmap_tool.py
+|   |-- subdomain_tool.py
+|   |-- httpx_tool.py
+|   |-- dirsearch_tool.py
+|
+|-- reporting/
+|   |-- report_generator.py
+|
+|-- memory/
+|   `-- session.json
+|
+|-- logs/
+|   `-- session.log
+|
+|-- reports/
+|   `-- final_report.txt
+|
+|-- wordlists/
+|   `-- fuzz_wordlist.txt
+|
+|-- main.py
+|-- requirements.txt
+|-- .gitignore
+`-- README.md
+```
+
+## Setup
+
+1. Create and activate a Python environment.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+2. Install dependencies.
+
+```powershell
+pip install -r requirements.txt
+```
+
+3. Ensure external tools are installed and available in PATH:
+
+- `subfinder`
+- `nmap`
+- `httpx`
+- `ffuf`
+
+4. Optional LLM setup (for vulnerability enrichment):
+
+- Start Ollama locally
+- Pull the configured model (default: `mistral`)
+
+5. Run the agent:
+
+```powershell
 python main.py example.com
 ```
 
-## Configuration
+## Example Report Output
 
-Main runtime settings live in [config.py](config.py).
+```text
+==============================
+AUTONOMOUS RED TEAM REPORT
+==========================
 
-Most important values to review:
+Target: example.com
 
-- LLM:
-	- OLLAMA_URL
-	- OLLAMA_MODEL
-	- REQUIRE_LLM
-	- ALLOW_LLM_FALLBACK
-- Iteration and runtime policy:
-	- MAX_ITERATIONS
-	- TOOL_TIMEOUT
-	- MAX_COMMANDS_PER_ITERATION
-	- MAX_COMMAND_TIMEOUT
-- Tool paths:
-	- NMAP_PATH
-	- FFUF_PATH
-	- NUCLEI_PATH
-	- SUBFINDER_PATH
-- Scope and recon behavior:
-	- PASSIVE_RECON_FIRST
-	- PASSIVE_RECON_ENABLED
-	- SHODAN_API_KEY (optional)
-- Proxy and operational safety:
-	- ENABLE_PROXY
-	- PROXY_URL
-	- NMAP_TIMING_TEMPLATE
-- Security and data handling:
-	- ENCRYPTION_ENABLED
-	- REDTEAM_MASTER_KEY (via environment)
-- RAG:
-	- RAG_ENABLED
-	- RAG_TOP_K
-	- RAG_MIN_SIMILARITY
-	- RAG_CHUNK_MIN_WORDS
-	- RAG_CHUNK_MAX_WORDS
+--- Recon Summary ---
+Subdomains: 2
+Open Ports: 4
+Services: 5
+Endpoints: 3
 
-The project automatically picks an available wordlist from [wordlists/Wordlists](wordlists/Wordlists).
-
-## Output
-
-Each run creates isolated artifacts:
-
-- Database: redteam.db
-- Markdown report: [output](output)
-- Vulnerability summary text: output/vulns_<target>.txt
-
-Reports include:
-
-- Iteration-by-iteration command chain
-- Success and failure signals
-- Confidence and overall risk
-- Vulnerability candidates with evidence and recommendations
-
-## RAG (Context-Aware Reasoning)
-
-RAG helps improve planning and analysis quality by retrieving relevant local context.
-
-Flow:
-
-1. Chunk curated or historical text into segments.
-2. Embed segments using sentence-transformers.
-3. Store vectors in FAISS.
-4. Retrieve top-k relevant context for planning/analysis.
-5. Inject context into prompts.
-6. Ingest fresh scan outputs back into the index.
-
-RAG paths:
-
-- Data: [rag/data](rag/data)
-- Index: [rag/index](rag/index)
-- Pipeline code: [rag](rag)
-
-## Docker
-
-```bash
-docker build -t autonomous-recon .
-docker run --rm autonomous-recon example.com
+--- Vulnerabilities Found ---
+[MEDIUM] Sensitive path exposure candidate
+Target: example.com
+Evidence: Discovered path 'admin?param' with status 200
+...
 ```
 
-## Code Map
+## Configuration Notes
 
-- [main.py](main.py): Orchestrates autonomous loop and run lifecycle.
-- [decision_engine.py](decision_engine.py): Planning, analysis, and final synthesis.
-- [executor.py](executor.py): Command execution, timeout, and output capture.
-- [passive_recon.py](passive_recon.py): Passive intelligence collection.
-- [recon.py](recon.py): Target normalization and recon helpers.
-- [memory.py](memory.py): Run-scoped persistence layer.
-- [reporter.py](reporter.py): Final markdown and vulnerability summary generation.
-- [trace_logger.py](trace_logger.py): Trace events and run diagnostics.
-- [rag/embedder.py](rag/embedder.py): Embedding service.
-- [rag/vector_store.py](rag/vector_store.py): FAISS index operations.
-- [rag/ingest.py](rag/ingest.py): Data ingestion and chunk pipeline.
-- [rag/retriever.py](rag/retriever.py): Retrieval and relevance filtering.
-- [rag/update_loop.py](rag/update_loop.py): Runtime RAG bootstrap and updates.
+Runtime settings are controlled in `core/config.py` and by environment variables.
+Common settings:
 
-## Troubleshooting
+- `MAX_ITERATIONS`
+- `COMMAND_TIMEOUT`
+- `COMMAND_RETRIES`
+- `OLLAMA_URL`
+- `OLLAMA_MODEL`
+- `LLM_TIMEOUT`
+- `DIRSEARCH_WORDLIST`
 
-- Ollama not reachable:
-	- Start Ollama and verify the configured model is pulled.
-- Tool access denied:
-	- Re-check executable path and permissions in [config.py](config.py).
-- Empty findings:
-	- Increase timeout, improve wordlists, and validate target scope.
-- Weak analysis quality:
-	- Seed better RAG content under [rag/data](rag/data).
+## Disclaimer
 
-## How to Elevate This Repo Online
-
-Use this checklist to make the project stand out on GitHub and in security communities.
-
-1. Improve first impression
-	 - Keep this README concise at the top with a strong one-line value proposition.
-	 - Add a short demo section with one real run screenshot from [output](output).
-	 - Pin this repository on your GitHub profile.
-2. Increase discoverability (SEO inside GitHub)
-	 - Add repository topics: autonomous-security, red-team, recon, ollama, rag, cybersecurity.
-	 - Use a clear repository description in settings.
-	 - Keep section headings keyword-rich (recon, vulnerability analysis, RAG).
-3. Build trust and professionalism
-	 - Add LICENSE, CONTRIBUTING.md, and SECURITY.md.
-	 - Add a Responsible Use section with authorization requirements.
-	 - Publish a roadmap with near-term milestones.
-4. Show engineering quality
-	 - Add unit tests for parser and state update logic.
-	 - Add CI (lint + test) so visitors see passing checks.
-	 - Include sample config and sample report artifacts.
-5. Create momentum
-	 - Post a launch thread with architecture + sample output.
-	 - Share one weekly update: feature, bug fix, or benchmark.
-	 - Cut versioned releases with changelog notes.
-
-## Suggested Next Additions
-
-- LICENSE
-- CONTRIBUTING.md
-- SECURITY.md
-- CHANGELOG.md
-- .github/workflows/ci.yml
-
-These files substantially improve credibility for recruiters, collaborators, and open-source users.
+This project is for educational use and authorized security testing only.
+Do not scan or test systems without explicit written permission.
+The authors and users are responsible for legal and ethical usage.

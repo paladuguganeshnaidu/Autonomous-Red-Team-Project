@@ -16,13 +16,35 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    """Read an integer environment variable with fallback on invalid values."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float environment variable with fallback on invalid values."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
 def _resolve_wordlist(default_path: str) -> str:
     """Resolve the first existing wordlist path from environment and defaults."""
     env_path = os.getenv("DIRSEARCH_WORDLIST", "").strip()
     candidates = [
         env_path,
         default_path,
-        str(Path("wordlists") / "Wordlists" / "wordlist.txt"),
+        str(Path("wordlists") / "fuzz_wordlist.txt"),
     ]
 
     for candidate in candidates:
@@ -62,7 +84,7 @@ class AppConfig:
     httpx_path: str = "httpx"
     ffuf_path: str = "ffuf"
 
-    dirsearch_wordlist: str = str(Path("wordlists") / "Wordlists" / "fuzz_wordlist.txt")
+    dirsearch_wordlist: str = str(Path("wordlists") / "fuzz_wordlist.txt")
     dirsearch_match_codes: str = "200,204,301,302,307,401,403"
     dirsearch_max_time: int = 90
     dirsearch_rate: int = 25
@@ -80,6 +102,9 @@ class AppConfig:
     ollama_url: str = "http://localhost:11434/api/generate"
     ollama_model: str = "mistral"
     llm_timeout: int = 45
+    enable_llm_analysis: bool = True
+    llm_min_confidence_stop: float = 0.85
+    max_no_data_loops: int = 3
 
     log_file: str = str(Path("logs") / "session.log")
     session_file: str = str(Path("memory") / "session.json")
@@ -87,31 +112,34 @@ class AppConfig:
     @classmethod
     def from_env(cls) -> "AppConfig":
         """Build a configuration object from environment variables."""
-        default_wordlist = str(Path("wordlists") / "Wordlists" / "fuzz_wordlist.txt")
+        default_wordlist = str(Path("wordlists") / "fuzz_wordlist.txt")
 
         return cls(
-            max_iterations=int(os.getenv("MAX_ITERATIONS", "8")),
-            command_timeout=int(os.getenv("COMMAND_TIMEOUT", "120")),
-            command_retries=int(os.getenv("COMMAND_RETRIES", "2")),
+            max_iterations=_env_int("MAX_ITERATIONS", 8),
+            command_timeout=_env_int("COMMAND_TIMEOUT", 120),
+            command_retries=min(2, max(0, _env_int("COMMAND_RETRIES", 2))),
             nmap_path=os.getenv("NMAP_PATH", "nmap"),
             subfinder_path=os.getenv("SUBFINDER_PATH", "subfinder"),
             httpx_path=os.getenv("HTTPX_PATH", "httpx"),
             ffuf_path=os.getenv("FFUF_PATH", "ffuf"),
             dirsearch_wordlist=_resolve_wordlist(default_wordlist),
             dirsearch_match_codes=os.getenv("DIRSEARCH_MATCH_CODES", "200,204,301,302,307,401,403"),
-            dirsearch_max_time=int(os.getenv("DIRSEARCH_MAX_TIME", "90")),
-            dirsearch_rate=int(os.getenv("DIRSEARCH_RATE", "25")),
-            request_timeout=int(os.getenv("REQUEST_TIMEOUT", "10")),
+            dirsearch_max_time=_env_int("DIRSEARCH_MAX_TIME", 90),
+            dirsearch_rate=_env_int("DIRSEARCH_RATE", 25),
+            request_timeout=_env_int("REQUEST_TIMEOUT", 10),
             user_agents=_resolve_user_agents(),
             enable_jitter=_env_bool("ENABLE_JITTER", True),
-            jitter_min_sec=float(os.getenv("JITTER_MIN_SEC", "0.3")),
-            jitter_max_sec=float(os.getenv("JITTER_MAX_SEC", "1.2")),
-            rate_limit_per_sec=float(os.getenv("RATE_LIMIT_PER_SEC", "2.0")),
+            jitter_min_sec=_env_float("JITTER_MIN_SEC", 0.3),
+            jitter_max_sec=_env_float("JITTER_MAX_SEC", 1.2),
+            rate_limit_per_sec=_env_float("RATE_LIMIT_PER_SEC", 2.0),
             stop_on_vuln=_env_bool("STOP_ON_VULN", True),
             use_llm_planner=_env_bool("USE_LLM_PLANNER", False),
             ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate"),
             ollama_model=os.getenv("OLLAMA_MODEL", "mistral"),
-            llm_timeout=int(os.getenv("LLM_TIMEOUT", "45")),
+            llm_timeout=_env_int("LLM_TIMEOUT", 45),
+            enable_llm_analysis=_env_bool("ENABLE_LLM_ANALYSIS", True),
+            llm_min_confidence_stop=_env_float("LLM_MIN_CONFIDENCE_STOP", 0.85),
+            max_no_data_loops=max(1, _env_int("MAX_NO_DATA_LOOPS", 3)),
             log_file=os.getenv("LOG_FILE", str(Path("logs") / "session.log")),
             session_file=os.getenv("SESSION_FILE", str(Path("memory") / "session.json")),
         )
