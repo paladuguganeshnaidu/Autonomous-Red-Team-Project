@@ -1,0 +1,176 @@
+{
+  "run_id": "6ee956f9-3ab5-4108-b5a2-31125516f09b",
+  "target": "localhost",
+  "status": "stopped",
+  "active_agent": "recon_agent",
+  "current_iteration": 3,
+  "iterations": [
+    {
+      "iteration": 1,
+      "plan": {
+        "agent_role": "recon_agent",
+        "reason": "Ports are not scanned yet.",
+        "stop": false,
+        "actions": [
+          {
+            "tool": "nmap",
+            "description": "Run service and port discovery.",
+            "params": {
+              "target": "localhost"
+            }
+          }
+        ]
+      },
+      "results": [
+        {
+          "tool": "nmap",
+          "exit_code": -1,
+          "error": "nmap timed out after 5s",
+          "raw_output": "Starting Nmap 7.98 ( https://nmap.org ) at 2026-04-14 19:07 +0530\n",
+          "ports": [],
+          "command": "nmap -sV -Pn localhost",
+          "duration_sec": 5.11,
+          "attempt": 1
+        }
+      ],
+      "analysis": {
+        "summary": "Processed 1 tool results.",
+        "findings": [
+          "nmap error: nmap timed out after 5s"
+        ],
+        "vulnerabilities": [],
+        "subdomains": [],
+        "ports": [],
+        "services": [],
+        "risk_level": "low",
+        "risk_score": 0.1,
+        "confidence_score": 0.37,
+        "stop_recommended": false,
+        "stop_reason": "",
+        "next_action_hint": "Continue iteration"
+      },
+      "recorded_at": "2026-04-14T13:37:28.060043+00:00"
+    },
+    {
+      "iteration": 2,
+      "plan": {
+        "agent_role": "recon_agent",
+        "reason": "Nmap did not confirm web ports; probe baseline HTTP endpoint directly.",
+        "stop": false,
+        "actions": [
+          {
+            "tool": "http_probe",
+            "description": "Baseline HTTP probe even when port evidence is incomplete.",
+            "params": {
+              "urls": [
+                "https://localhost"
+              ]
+            }
+          }
+        ]
+      },
+      "results": [
+        {
+          "tool": "http_probe",
+          "exit_code": -1,
+          "error": "All HTTP probes failed.",
+          "responses": [
+            {
+              "url": "https://localhost",
+              "status_code": 0,
+              "title": "",
+              "webserver": "",
+              "tech": [],
+              "missing_headers": [
+                "Content-Security-Policy",
+                "Strict-Transport-Security",
+                "X-Frame-Options"
+              ],
+              "error": "httpx executable not found: httpx | HTTPSConnectionPool(host='localhost', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x000002316CB70C20>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it'))"
+            }
+          ],
+          "raw_output": "",
+          "duration_sec": 4.18,
+          "attempt": 1
+        }
+      ],
+      "analysis": {
+        "summary": "Processed 1 tool results.",
+        "findings": [
+          "http_probe error: All HTTP probes failed.",
+          "HTTP probe error on https://localhost: httpx executable not found: httpx | HTTPSConnectionPool(host='localhost', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x000002316CB70C20>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it'))"
+        ],
+        "vulnerabilities": [],
+        "subdomains": [],
+        "ports": [],
+        "services": [],
+        "risk_level": "low",
+        "risk_score": 0.1,
+        "confidence_score": 0.39,
+        "stop_recommended": false,
+        "stop_reason": "",
+        "next_action_hint": "Continue iteration"
+      },
+      "recorded_at": "2026-04-14T13:37:32.700100+00:00"
+    }
+  ],
+  "subdomains": [],
+  "ports": [],
+  "services": [],
+  "vulnerabilities": [],
+  "scores": {
+    "confidence_score": 0.39,
+    "risk_score": 0.1
+  },
+  "decisions": [
+    {
+      "iteration": 1,
+      "agent_role": "recon_agent",
+      "reason": "Ports are not scanned yet.",
+      "stop": false,
+      "recorded_at": "2026-04-14T13:37:22.571658+00:00"
+    },
+    {
+      "iteration": 2,
+      "agent_role": "recon_agent",
+      "reason": "Nmap did not confirm web ports; probe baseline HTTP endpoint directly.",
+      "stop": false,
+      "recorded_at": "2026-04-14T13:37:28.066539+00:00"
+    },
+    {
+      "iteration": 3,
+      "agent_role": "recon_agent",
+      "reason": "No new high-value actions available.",
+      "stop": true,
+      "recorded_at": "2026-04-14T13:37:32.707391+00:00"
+    }
+  ],
+  "tool_failures": [
+    {
+      "iteration": 1,
+      "tool": "nmap",
+      "error": "nmap timed out after 5s",
+      "recorded_at": "2026-04-14T13:37:28.060085+00:00"
+    },
+    {
+      "iteration": 2,
+      "tool": "http_probe",
+      "error": "All HTTP probes failed.",
+      "recorded_at": "2026-04-14T13:37:32.700138+00:00"
+    }
+  ],
+  "stop_reason": "No new high-value actions available.",
+  "created_at": "2026-04-14T13:37:22.570240+00:00",
+  "updated_at": "2026-04-14T13:37:32.715570+00:00",
+  "summary": {
+    "target": "localhost",
+    "run_id": "6ee956f9-3ab5-4108-b5a2-31125516f09b",
+    "total_iterations": 2,
+    "total_findings": 3,
+    "total_vulnerabilities": 0,
+    "overall_risk": "low",
+    "risk_score": 0.1,
+    "confidence_score": 0.39,
+    "stop_reason": "No new high-value actions available."
+  }
+}

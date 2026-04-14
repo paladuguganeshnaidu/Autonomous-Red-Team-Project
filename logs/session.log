@@ -1,0 +1,29 @@
+2026-04-14 19:04:20,937 | INFO | [INFO] Run started for target=localhost
+2026-04-14 19:04:20,939 | INFO | [DECISION] iteration=1 role=recon_agent stop=False reason=Ports are not scanned yet.
+2026-04-14 19:04:20,939 | INFO | Executing step 1 with tool=nmap | Run service and port discovery.
+2026-04-14 19:04:26,430 | INFO | Tool nmap finished with exit_code=-1
+2026-04-14 19:04:26,434 | INFO | [RESULT] iteration=1 risk=low risk_score=0.10 confidence=0.37 findings=1 vulnerabilities=0
+2026-04-14 19:04:26,441 | INFO | [DECISION] iteration=2 role=recon_agent stop=True reason=No new high-value actions available.
+2026-04-14 19:04:26,447 | INFO | [INFO] Run completed. Session persisted at memory\session.json
+2026-04-14 19:05:51,697 | INFO | [INFO] Run started for target=localhost
+2026-04-14 19:05:51,702 | INFO | [DECISION] iteration=1 role=recon_agent stop=False reason=Ports are not scanned yet.
+2026-04-14 19:05:51,703 | INFO | Executing step 1 with tool=nmap | Run service and port discovery.
+2026-04-14 19:05:57,584 | INFO | Tool nmap finished with exit_code=-1
+2026-04-14 19:05:57,587 | INFO | [RESULT] iteration=1 risk=low risk_score=0.10 confidence=0.37 findings=1 vulnerabilities=0
+2026-04-14 19:05:57,592 | INFO | [DECISION] iteration=2 role=recon_agent stop=False reason=Nmap did not confirm web ports; probe baseline HTTP endpoint directly.
+2026-04-14 19:05:57,593 | INFO | Executing step 1 with tool=http_probe | Baseline HTTP probe even when port evidence is incomplete.
+2026-04-14 19:06:02,180 | INFO | Tool http_probe finished with exit_code=-1
+2026-04-14 19:06:02,191 | INFO | [RESULT] iteration=2 risk=medium risk_score=0.60 confidence=0.44 findings=2 vulnerabilities=1
+2026-04-14 19:06:02,209 | INFO | [DECISION] iteration=3 role=analysis_agent stop=True reason=Vulnerability already detected and stop_on_vuln is enabled.
+2026-04-14 19:06:02,226 | INFO | [INFO] Run completed. Session persisted at memory\session.json
+2026-04-14 19:07:22,570 | INFO | [INFO] Run started for target=localhost
+2026-04-14 19:07:22,572 | INFO | [DECISION] iteration=1 role=recon_agent stop=False reason=Ports are not scanned yet.
+2026-04-14 19:07:22,572 | INFO | Executing step 1 with tool=nmap | Run service and port discovery.
+2026-04-14 19:07:28,057 | INFO | Tool nmap finished with exit_code=-1
+2026-04-14 19:07:28,062 | INFO | [RESULT] iteration=1 risk=low risk_score=0.10 confidence=0.37 findings=1 vulnerabilities=0
+2026-04-14 19:07:28,069 | INFO | [DECISION] iteration=2 role=recon_agent stop=False reason=Nmap did not confirm web ports; probe baseline HTTP endpoint directly.
+2026-04-14 19:07:28,069 | INFO | Executing step 1 with tool=http_probe | Baseline HTTP probe even when port evidence is incomplete.
+2026-04-14 19:07:32,699 | INFO | Tool http_probe finished with exit_code=-1
+2026-04-14 19:07:32,703 | INFO | [RESULT] iteration=2 risk=low risk_score=0.10 confidence=0.39 findings=2 vulnerabilities=0
+2026-04-14 19:07:32,710 | INFO | [DECISION] iteration=3 role=recon_agent stop=True reason=No new high-value actions available.
+2026-04-14 19:07:32,717 | INFO | [INFO] Run completed. Session persisted at memory\session.json
