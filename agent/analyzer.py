@@ -104,6 +104,20 @@ def analyze_result(result: dict, state: dict, config: Optional[Any] = None) -> d
     if len(normalized["history"]) > 500:
         normalized["history"] = normalized["history"][-500:]
 
+    # Generate a simplified summary for non-technical users
+    summary = []
+    if result.get("data"):
+        if "subdomains" in result["data"]:
+            summary.append(f"Discovered {len(result['data']['subdomains'])} subdomains.")
+        if "ports" in result["data"]:
+            summary.append(f"Found {len(result['data']['ports'])} open ports.")
+        if "technologies" in result["data"]:
+            summary.append(f"Identified {len(result['data']['technologies'])} technologies in use.")
+        if "vulnerabilities" in result["data"]:
+            summary.append(f"Detected {len(result['data']['vulnerabilities'])} potential vulnerabilities.")
+    
+    state["summary"] = " ".join(summary) if summary else "No significant findings to report."
+
     return normalized
 
 

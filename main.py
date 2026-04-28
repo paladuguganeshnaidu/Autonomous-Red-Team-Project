@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 import sys
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional
 from urllib.parse import urlparse
 
 from agent.analyzer import analyze_result
@@ -15,6 +16,11 @@ from core.config import AppConfig
 from core.logger import build_logger
 from core.state_manager import StateManager
 from reporting.report_generator import generate_report
+
+
+ProgressCallback = Callable[[str, str, Dict[str, Any]], None]
+
+
 def _action_signature(action: Dict[str, Any]) -> str:
     """Build stable action signature for duplicate prevention memory."""
     action_name = str(action.get("action", "")).strip().lower()
@@ -33,17 +39,130 @@ def _normalize_signature_target(target: str) -> str:
 
     return clean.split("/")[0].strip().lower()
 
-def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, memory: Any, state_manager: StateManager):
+
+def _emit_agent_update(
+    message: str,
+    logger: Any,
+    memory: Any,
+    callback: Optional[ProgressCallback] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Emit one conversational agent update across CLI, memory, and web callbacks."""
+    payload = metadata or {}
+    print(f"[Agent] {message}")
+    logger.info("[CHAT_AGENT] %s", message)
+    memory.add_message("agent", message, metadata=payload)
+    if callback:
+        callback("agent", message, payload)
+
+
+def _resolve_command(action: Dict[str, Any], result: Dict[str, Any]) -> str:
+    """Resolve the executed command string for reporting and chat narration."""
+    data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
+    return str(data.get("command") or action.get("command") or action.get("action", "")).strip()
+
+
+def _summarize_result(result: Dict[str, Any]) -> str:
+    """Build a compact operator-friendly summary for one action result."""
+    status = str(result.get("status", "failed")).strip().lower()
+    data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
+
+    if status != "success":
+        return str(result.get("error") or "The step did not complete successfully.").strip()
+
+    if "subdomains" in data:
+        return f"Discovered {len(data.get('subdomains', []))} subdomains."
+
+    if "ports" in data:
+        return f"Observed {len(data.get('ports', []))} open ports/services."
+
+    if "responses" in data:
+        live = [
+            response
+            for response in data.get("responses", [])
+            if int(response.get("status_code", 0) or 0) > 0
+        ]
+        techs = []
+        for response in live:
+            for tech in response.get("tech", []):
+                clean = str(tech).strip()
+                if clean and clean not in techs:
+                    techs.append(clean)
+        summary = f"Confirmed {len(live)} live web endpoints."
+        if techs:
+            summary += f" Technology signals: {', '.join(techs[:5])}."
+        return summary
+
+    findings = data.get("findings", [])
+    if isinstance(findings, list):
+        return f"Found {len(findings)} interesting content discovery results."
+
+    if data.get("findings"):
+        snippet = str(data.get("findings", "")).strip().replace("\r", " ").replace("\n", " ")
+        return snippet[:180]
+
+    if data.get("message"):
+        return str(data.get("message", "")).strip()
+
+    return "Step completed successfully."
+
+
+def _result_excerpt(result: Dict[str, Any], limit: int = 800) -> str:
+    """Extract a bounded raw output snippet for memory and chat history."""
+    data = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
+
+    if data.get("raw_output"):
+        text = str(data.get("raw_output", ""))
+    elif isinstance(data.get("findings"), str):
+        text = str(data.get("findings", ""))
+    elif result.get("error"):
+        text = str(result.get("error", ""))
+    else:
+        text = str(data)
+
+    compact = re.sub(r"\s+", " ", text).strip()
+    return compact[:limit]
+
+
+def _build_report_path(target: str) -> Path:
+    """Return a stable report path for the current target."""
+    slug = re.sub(r"[^a-zA-Z0-9.-]+", "_", str(target or "scan").strip()).strip("._")
+    slug = slug or "scan"
+    return Path("reports") / f"{slug}_final_report.txt"
+
+
+def run_autonomous_scan(
+    state: Dict[str, Any],
+    config: AppConfig,
+    logger: Any,
+    memory: Any,
+    state_manager: StateManager,
+    progress_callback: Optional[ProgressCallback] = None,
+):
     """Run the autonomous recon agent loop, updating memory."""
     iteration = 0
     max_loops = int(getattr(config, "max_iterations", 10))
+    target = str(state.get("target", "unknown")).strip() or "unknown"
+
+    _emit_agent_update(
+        f"Starting reconnaissance on {target}. I will share each command I run and send the final report here.",
+        logger,
+        memory,
+        callback=progress_callback,
+        metadata={"type": "scan_status", "status": "started", "target": target},
+    )
     
     while True:
         if iteration >= max_loops:
             logger.info("[INFO] Max iterations reached (%s).", max_loops)
             msg = f"Scan paused after {max_loops} iterations."
-            print(f"[Agent] {msg}")
-            memory.add_message("agent", msg)
+            _emit_agent_update(
+                msg,
+                logger,
+                memory,
+                callback=progress_callback,
+                metadata={"type": "scan_status", "status": "paused", "target": target},
+            )
             break
 
         action = decide_next_action(state, config, memory.get_summary(), memory.get_recent(5))
@@ -51,8 +170,13 @@ def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, m
 
         if str(action.get("action", "")).strip().lower() == "stop":
             msg = f"Scan complete. {action.get('reason', '')}"
-            print(f"[Agent] {msg}")
-            memory.add_message("agent", msg)
+            _emit_agent_update(
+                msg,
+                logger,
+                memory,
+                callback=progress_callback,
+                metadata={"type": "scan_status", "status": "stopped", "target": target},
+            )
             state.setdefault("history", []).append(
                 {
                     "type": "loop-stop",
@@ -68,15 +192,56 @@ def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, m
             state.setdefault("actions_taken", []).append(signature)
 
         cmd = action.get("command", "")
-        print(f"[Agent] Running: {cmd}")
+        action_name = str(action.get("action", "")).strip().lower()
+        friendly_action = action_name.replace("_", " ") or "scan step"
+        step_msg = f"Step {iteration + 1}: running {friendly_action} with `{cmd}`."
+        _emit_agent_update(
+            step_msg,
+            logger,
+            memory,
+            callback=progress_callback,
+            metadata={
+                "type": "scan_step",
+                "status": "running",
+                "step": iteration + 1,
+                "command": cmd,
+                "action": action_name,
+                "target": str(action.get("target", target)).strip(),
+            },
+        )
+        logger.info("[EXECUTING] %s", cmd)
         result = execute_action(action, config)
         logger.info("[RESULT] %s", result)
+        command_used = _resolve_command(action, result)
+        result_summary = _summarize_result(result)
 
-        memory.add_message("tool", f"Command: {cmd}\nOutput: {result.get('output', '')}", metadata={
-            "type": "tool_output",
-            "tool": action.get("action"),
-            "target": action.get("target")
-        })
+        memory.add_message(
+            "tool",
+            f"Command: {command_used}\nSummary: {result_summary}\nOutput: {_result_excerpt(result)}",
+            metadata={
+                "type": "tool_output",
+                "tool": action.get("action"),
+                "target": action.get("target"),
+                "command": command_used,
+                "status": result.get("status"),
+                "summary": result_summary,
+            },
+        )
+
+        _emit_agent_update(
+            f"Step {iteration + 1} finished. {result_summary}",
+            logger,
+            memory,
+            callback=progress_callback,
+            metadata={
+                "type": "scan_step",
+                "status": str(result.get("status", "unknown")).strip().lower(),
+                "step": iteration + 1,
+                "command": command_used,
+                "action": action_name,
+                "summary": result_summary,
+            },
+        )
 
         state = analyze_result(result, state, config)
         no_new_data = _latest_no_new_data(state)
@@ -88,7 +253,13 @@ def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, m
                 "target": str(action.get("target", "")).strip(),
                 "score": float(action.get("score", 0.0) or 0.0),
                 "reason": str(action.get("reason", "")).strip(),
+                "command": command_used,
                 "status": str(result.get("status", "failed")).strip().lower(),
+                "summary": result_summary,
+                "duration_sec": float(
+                    (result.get("data", {}) if isinstance(result.get("data"), dict) else {}).get("duration_sec", 0.0)
+                    or 0.0
+                ),
                 "no_new_data": no_new_data,
             }
         )
@@ -100,30 +271,59 @@ def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, m
         if _no_new_data_streak(state, max_no_data_loops) >= max_no_data_loops:
             logger.info("[INFO] Stopping after %s consecutive loops with no new data.", max_no_data_loops)
             msg = "Stopping scan due to no new data found in recent steps."
-            print(f"[Agent] {msg}")
-            memory.add_message("agent", msg)
+            _emit_agent_update(
+                msg,
+                logger,
+                memory,
+                callback=progress_callback,
+                metadata={"type": "scan_status", "status": "stopped", "target": target},
+            )
             break
 
         if _has_high_confidence_vulnerability(state, float(getattr(config, "llm_min_confidence_stop", 0.85))):
             logger.info("[INFO] High-confidence vulnerability detected. Stopping autonomous loop.")
             msg = "High-confidence vulnerability found. Stopping scan early."
-            print(f"[Agent] {msg}")
-            memory.add_message("agent", msg)
+            _emit_agent_update(
+                msg,
+                logger,
+                memory,
+                callback=progress_callback,
+                metadata={"type": "scan_status", "status": "stopped", "target": target},
+            )
             break
 
     state_manager.persist(state)
     logger.info("[INFO] Autonomous scan complete. Generating final report.")
     final_report = generate_report(state)
     
-    # Save the report to reports directory
-    report_path = Path("reports/final_report.txt")
+    report_path = _build_report_path(target)
     report_path.parent.mkdir(exist_ok=True)
     report_path.write_text(final_report, encoding="utf-8")
-    
+    Path("reports/final_report.txt").write_text(final_report, encoding="utf-8")
+
+    state["latest_report_path"] = str(report_path)
+    state_manager.persist(state)
+
     msg = f"Final Report generated and saved to {report_path}."
-    print(f"[Agent] {msg}")
-    memory.add_message("agent", msg)
-    memory.add_message("agent", final_report)
+    _emit_agent_update(
+        msg,
+        logger,
+        memory,
+        callback=progress_callback,
+        metadata={
+            "type": "scan_status",
+            "status": "report_ready",
+            "target": target,
+            "report_path": str(report_path),
+        },
+    )
+    _emit_agent_update(
+        final_report,
+        logger,
+        memory,
+        callback=progress_callback,
+        metadata={"type": "final_report", "target": target, "report_path": str(report_path)},
+    )
 
 
 

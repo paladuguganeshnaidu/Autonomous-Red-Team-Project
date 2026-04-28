@@ -57,6 +57,8 @@ class StateManager:
             "actions_taken": [],
             "action_history": [],
             "history": [],
+            "summary": "",
+            "latest_report_path": "",
         }
 
     def _normalize_state(self, state: Dict[str, Any]) -> Dict[str, Any]:
@@ -76,5 +78,8 @@ class StateManager:
         ]:
             value = state.get(key, [])
             normalized[key] = value if isinstance(value, list) else []
+
+        normalized["summary"] = str(state.get("summary", "")).strip()
+        normalized["latest_report_path"] = str(state.get("latest_report_path", "")).strip()
 
         return normalized

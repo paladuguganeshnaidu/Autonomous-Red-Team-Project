@@ -42,6 +42,7 @@ def execute_action(action: dict, config: Any) -> dict:
         "run_httpx": _execute_httpx,
         "run_dirsearch": _execute_dirsearch,
         "run_command": _execute_shell_command,
+        "read_file": lambda t, c: {},  # Handled inline
     }
 
     handler = handlers.get(action_name)
@@ -67,7 +68,16 @@ def execute_action(action: dict, config: Any) -> dict:
                 import subprocess
                 command = action.get("command", "")
                 res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
-                data = {"exit_code": res.returncode, "findings": res.stdout[:500]}
+                data = {"exit_code": res.returncode, "findings": res.stdout[:2000] + res.stderr[:2000]}
+            elif action_name == "read_file":
+                file_path = action.get("command", "") or action.get("target", "")
+                # Security limit scope to local workspace
+                import os
+                if ".." in file_path or file_path.startswith("/") or file_path.startswith("\\"):
+                    data = {"exit_code": -1, "findings": "Relative or absolute pathing denied for safety."}
+                else:
+                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                        data = {"exit_code": 0, "findings": f.read()[-5000:]} # Cap size to 5k
             else:
                 data = handler(target, config)
         except Exception as exc:

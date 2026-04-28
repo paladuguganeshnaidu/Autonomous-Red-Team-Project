@@ -202,6 +202,10 @@ def chat_with_agent(message: str, state: dict, history: list, config: Any) -> An
         "vulnerabilities": state.get("vulnerabilities", [])[:5]
     }, indent=2)
 
+    # Include simplified summary in the context string
+    simplified_summary = state.get("summary", "No summary available.")
+    context_str += f"\nSimplified Summary:\n{simplified_summary}\n"
+
     prompt = f"""You are an elite autonomous red team agent. You are discussing the current security assessment with your human operator. Keep your answers concise, direct, and under 3 sentences unless asked for details.
 If the operator asks you to execute a command, scan, or perform an action, provide the appropriate shell command.
 ALWAYS respond with a STRICT JSON object matching this exact schema:

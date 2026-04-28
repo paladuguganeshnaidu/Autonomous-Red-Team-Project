@@ -15,6 +15,7 @@ def generate_report(state: dict) -> str:
     )
     weaknesses = _derive_weaknesses(normalized, vulnerabilities)
     next_steps = _recommended_next_steps(normalized, vulnerabilities)
+    action_history = _normalize_action_history(normalized.get("action_history", []))
 
     lines: List[str] = []
     lines.append("==============================")
@@ -29,6 +30,28 @@ def generate_report(state: dict) -> str:
     lines.append(f"Services: {len(normalized.get('services', []))}")
     lines.append(f"Endpoints: {len(normalized.get('endpoints', []))}")
     lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("--- Execution Timeline ---")
+    lines.append("")
+
+    if action_history:
+        for index, item in enumerate(action_history, start=1):
+            action_name = str(item.get("action", "step")).replace("_", " ").strip()
+            command = str(item.get("command", "")).strip()
+            status = str(item.get("status", "unknown")).upper()
+            summary = str(item.get("summary", "")).strip()
+
+            lines.append(f"{index}. [{status}] {action_name}")
+            if command:
+                lines.append(f"Command: {command}")
+            if summary:
+                lines.append(f"Outcome: {summary}")
+            lines.append("")
+    else:
+        lines.append("No action history was persisted for this run.")
+        lines.append("")
+
     lines.append("---")
     lines.append("")
     lines.append("--- Vulnerabilities Found ---")
@@ -97,7 +120,29 @@ def _normalize_state(state: Dict[str, Any]) -> Dict[str, Any]:
         "endpoints": _dedupe_strings(state.get("endpoints", [])),
         "technologies": _dedupe_strings(state.get("technologies", [])),
         "vulnerabilities": state.get("vulnerabilities", []) if isinstance(state.get("vulnerabilities", []), list) else [],
+        "action_history": state.get("action_history", []) if isinstance(state.get("action_history", []), list) else [],
     }
+
+
+def _normalize_action_history(values: Iterable[Any]) -> List[Dict[str, Any]]:
+    """Normalize execution history entries for report rendering."""
+    normalized: List[Dict[str, Any]] = []
+
+    for item in values or []:
+        if not isinstance(item, dict):
+            continue
+
+        normalized.append(
+            {
+                "action": str(item.get("action", "")).strip(),
+                "command": str(item.get("command", "")).strip(),
+                "status": str(item.get("status", "")).strip().lower(),
+                "summary": str(item.get("summary", "")).strip(),
+                "target": str(item.get("target", "")).strip(),
+            }
+        )
+
+    return normalized
 
 
 def _normalize_vulnerabilities(values: Iterable[Any], default_target: str) -> List[Dict[str, Any]]:

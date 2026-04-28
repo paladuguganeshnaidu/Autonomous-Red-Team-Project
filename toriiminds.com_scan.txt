@@ -1,0 +1,95 @@
+# Nmap 7.98 scan initiated Tue Apr 28 18:21:27 2026 as: nmap -p- --open -sV -oN toriiminds.com_scan.txt toriiminds.com
+Nmap scan report for toriiminds.com (98.130.140.62)
+Host is up (0.044s latency).
+Other addresses for toriiminds.com (not scanned): 64:ff9b::6282:8c3e
+rDNS record for 98.130.140.62: ec2-98-130-140-62.ap-south-2.compute.amazonaws.com
+Not shown: 65525 filtered tcp ports (no-response), 1 closed tcp port (reset)
+Some closed ports may be reported as filtered due to --defeat-rst-ratelimit
+PORT     STATE SERVICE         VERSION
+22/tcp   open  ssh             OpenSSH 9.6p1 Ubuntu 3ubuntu13.15 (Ubuntu Linux; protocol 2.0)
+80/tcp   open  http            nginx 1.24.0 (Ubuntu)
+443/tcp  open  ssl/http        nginx 1.24.0 (Ubuntu)
+3000/tcp open  ppp?
+3001/tcp open  http            Node.js Express framework
+3002/tcp open  http            Node.js Express framework
+4000/tcp open  remoteanything?
+4001/tcp open  http            Node.js Express framework
+4002/tcp open  http            Node.js Express framework
+2 services unrecognized despite returning data. If you know the service/version, please submit the following fingerprints at https://nmap.org/cgi-bin/submit.cgi?new-service :
+==============NEXT SERVICE FINGERPRINT (SUBMIT INDIVIDUALLY)==============
+SF-Port3000-TCP:V=7.98%I=7%D=4/28%Time=69F0ADCE%P=i686-pc-windows-windows%
+SF:r(GetRequest,2EDE,"HTTP/1\.1\x20200\x20OK\r\nVary:\x20RSC,\x20Next-Rout
+SF:er-State-Tree,\x20Next-Router-Prefetch,\x20Accept-Encoding\r\nlink:\x20
+SF:</_next/static/media/103fc5fac08dcb15-s\.p\.woff2>;\x20rel=preload;\x20
+SF:as=\"font\";\x20crossorigin=\"\";\x20type=\"font/woff2\",\x20</_next/st
+SF:atic/media/bd1ee8ae1d896ce2-s\.p\.woff2>;\x20rel=preload;\x20as=\"font\
+SF:";\x20crossorigin=\"\";\x20type=\"font/woff2\"\r\nCache-Control:\x20no-
+SF:store,\x20must-revalidate\r\nX-Powered-By:\x20Next\.js\r\nContent-Type:
+SF:\x20text/html;\x20charset=utf-8\r\nDate:\x20Tue,\x2028\x20Apr\x202026\x
+SF:2012:53:34\x20GMT\r\nConnection:\x20close\r\n\r\n<!DOCTYPE\x20html><htm
+SF:l\x20lang=\"en\"><head><meta\x20charSet=\"utf-8\"/><meta\x20name=\"view
+SF:port\"\x20content=\"width=device-width,\x20initial-scale=1\"/><link\x20
+SF:rel=\"preload\"\x20as=\"image\"\x20href=\"/assets/images/logo/tori-ligh
+SF:t\.svg\"/><link\x20rel=\"preload\"\x20as=\"image\"\x20href=\"/assets/im
+SF:ages/logo/tori-black\.svg\"/><link\x20rel=\"preload\"\x20as=\"image\"\x
+SF:20href=\"/assets/images/logo/logo-dark\.png\"/><link\x20rel=\"preload\"
+SF:\x20as=\"image\"\x20href=\"/assets/images/logo/logo-white\.png\"")%r(He
+SF:lp,2F,"HTTP/1\.1\x20400\x20Bad\x20Request\r\nConnection:\x20close\r\n\r
+SF:\n")%r(NCP,2F,"HTTP/1\.1\x20400\x20Bad\x20Request\r\nConnection:\x20clo
+SF:se\r\n\r\n")%r(HTTPOptions,10DE,"HTTP/1\.1\x20200\x20OK\r\nVary:\x20RSC
+SF:,\x20Next-Router-State-Tree,\x20Next-Router-Prefetch,\x20Accept-Encodin
+SF:g\r\nlink:\x20</_next/static/media/103fc5fac08dcb15-s\.p\.woff2>;\x20re
+SF:l=preload;\x20as=\"font\";\x20crossorigin=\"\";\x20type=\"font/woff2\",
+SF:\x20</_next/static/media/bd1ee8ae1d896ce2-s\.p\.woff2>;\x20rel=preload;
+SF:\x20as=\"font\";\x20crossorigin=\"\";\x20type=\"font/woff2\"\r\nCache-C
+SF:ontrol:\x20no-store,\x20must-revalidate\r\nX-Powered-By:\x20Next\.js\r\
+SF:nContent-Type:\x20text/html;\x20charset=utf-8\r\nDate:\x20Tue,\x2028\x2
+SF:0Apr\x202026\x2012:53:35\x20GMT\r\nConnection:\x20close\r\n\r\n<!DOCTYP
+SF:E\x20html><html\x20lang=\"en\"><head><meta\x20charSet=\"utf-8\"/><meta\
+SF:x20name=\"viewport\"\x20content=\"width=device-width,\x20initial-scale=
+SF:1\"/><link\x20rel=\"preload\"\x20as=\"image\"\x20href=\"/assets/images/
+SF:logo/tori-light\.svg\"/><link\x20rel=\"preload\"\x20as=\"image\"\x20hre
+SF:f=\"/assets/images/logo/tori-black\.svg\"/><link\x20rel=\"preload\"\x20
+SF:as=\"image\"\x20href=\"/assets/images/logo/logo-dark\.png\"/><link\x20r
+SF:el=\"preload\"\x20as=\"image\"\x20href=\"/assets/images/logo/logo-white
+SF:\.png\"");
+==============NEXT SERVICE FINGERPRINT (SUBMIT INDIVIDUALLY)==============
+SF-Port4000-TCP:V=7.98%I=7%D=4/28%Time=69F0ADC9%P=i686-pc-windows-windows%
+SF:r(GetRequest,3025,"HTTP/1\.1\x20200\x20OK\r\nVary:\x20RSC,\x20Next-Rout
+SF:er-State-Tree,\x20Next-Router-Prefetch,\x20Accept-Encoding\r\nlink:\x20
+SF:</_next/static/media/0484562807a97172-s\.p\.woff2>;\x20rel=preload;\x20
+SF:as=\"font\";\x20crossorigin=\"\";\x20type=\"font/woff2\",\x20</_next/st
+SF:atic/media/7db6c35d839a711c-s\.p\.woff2>;\x20rel=preload;\x20as=\"font\
+SF:";\x20crossorigin=\"\";\x20type=\"font/woff2\",\x20</_next/static/media
+SF:/8888a3826f4a3af4-s\.p\.woff2>;\x20rel=preload;\x20as=\"font\";\x20cros
+SF:sorigin=\"\";\x20type=\"font/woff2\",\x20</_next/static/media/b957ea75a
+SF:84b6ea7-s\.p\.woff2>;\x20rel=preload;\x20as=\"font\";\x20crossorigin=\"
+SF:\";\x20type=\"font/woff2\",\x20</_next/static/media/eafabf029ad39a43-s\
+SF:.p\.woff2>;\x20rel=preload;\x20as=\"font\";\x20crossorigin=\"\";\x20typ
+SF:e=\"font/woff2\"\r\nCache-Control:\x20no-store,\x20must-revalidate\r\nX
+SF:-Powered-By:\x20Next\.js\r\nContent-Type:\x20text/html;\x20charset=utf-
+SF:8\r\nDate:\x20Tue,\x2028\x20Apr\x202026\x2012:53:29\x20GMT\r\nConnectio
+SF:n:\x20close\r\n\r\n<!DOCTYPE\x20html><html\x20lang=\"en\"><head><meta\x
+SF:20charSet=\"utf-8\"/><meta\x20name=\"viewport\"\x20content=\"widt")%r(N
+SF:oMachine,2F,"HTTP/1\.1\x20400\x20Bad\x20Request\r\nConnection:\x20close
+SF:\r\n\r\n")%r(HTTPOptions,1225,"HTTP/1\.1\x20200\x20OK\r\nVary:\x20RSC,\
+SF:x20Next-Router-State-Tree,\x20Next-Router-Prefetch,\x20Accept-Encoding\
+SF:r\nlink:\x20</_next/static/media/0484562807a97172-s\.p\.woff2>;\x20rel=
+SF:preload;\x20as=\"font\";\x20crossorigin=\"\";\x20type=\"font/woff2\",\x
+SF:20</_next/static/media/7db6c35d839a711c-s\.p\.woff2>;\x20rel=preload;\x
+SF:20as=\"font\";\x20crossorigin=\"\";\x20type=\"font/woff2\",\x20</_next/
+SF:static/media/8888a3826f4a3af4-s\.p\.woff2>;\x20rel=preload;\x20as=\"fon
+SF:t\";\x20crossorigin=\"\";\x20type=\"font/woff2\",\x20</_next/static/med
+SF:ia/b957ea75a84b6ea7-s\.p\.woff2>;\x20rel=preload;\x20as=\"font\";\x20cr
+SF:ossorigin=\"\";\x20type=\"font/woff2\",\x20</_next/static/media/eafabf0
+SF:29ad39a43-s\.p\.woff2>;\x20rel=preload;\x20as=\"font\";\x20crossorigin=
+SF:\"\";\x20type=\"font/woff2\"\r\nCache-Control:\x20no-store,\x20must-rev
+SF:alidate\r\nX-Powered-By:\x20Next\.js\r\nContent-Type:\x20text/html;\x20
+SF:charset=utf-8\r\nDate:\x20Tue,\x2028\x20Apr\x202026\x2012:53:34\x20GMT\
+SF:r\nConnection:\x20close\r\n\r\n<!DOCTYPE\x20html><html\x20lang=\"en\"><
+SF:head><meta\x20charSet=\"utf-8\"/><meta\x20name=\"viewport\"\x20content=
+SF:\"widt");
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+# Nmap done at Tue Apr 28 18:23:42 2026 -- 1 IP address (1 host up) scanned in 134.89 seconds

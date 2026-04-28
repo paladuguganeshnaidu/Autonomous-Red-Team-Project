@@ -471,12 +471,24 @@
             fetchHistory();
         }
 
-        function startScan() {
+        async function startScan() {
             const target = document.getElementById('target').value;
             if (!target) return;
             startNewChat(); // reset chat for new scan
-            fetch(`/start?target=${encodeURIComponent(target)}`, { method: 'POST' });
-            appendCustomMessage("System", `Initiating scan sequence for target: ${target}`, 'sys');
+            typingIndicator.style.display = "flex";
+            try {
+                const res = await fetch(`/start?target=${encodeURIComponent(target)}`, { method: 'POST' });
+                const data = await res.json();
+                if (data.chat_id) {
+                    currentChatId = data.chat_id;
+                    fetchHistory();
+                }
+            } catch (e) {
+                console.error("Failed to start scan", e);
+                appendCustomMessage("System", `Failed to initiate scan for ${target}.`, 'sys');
+            } finally {
+                typingIndicator.style.display = "none";
+            }
         }
 
         function appendCustomMessage(title, text, type) {
