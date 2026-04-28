@@ -15,21 +15,11 @@ from core.config import AppConfig
 from core.logger import build_logger
 from core.state_manager import StateManager
 from reporting.report_generator import generate_report
-
-
-def _resolve_target(argv: list[str]) -> str:
-    """Resolve target from CLI args or interactive input."""
-    if len(argv) > 1:
-        return argv[1].strip()
-    return input("Enter target URL/domain/IP: ").strip()
-
-
 def _action_signature(action: Dict[str, Any]) -> str:
     """Build stable action signature for duplicate prevention memory."""
     action_name = str(action.get("action", "")).strip().lower()
     target = _normalize_signature_target(str(action.get("target", "")).strip())
     return f"{action_name}::{target}"
-
 
 def _normalize_signature_target(target: str) -> str:
     """Normalize action signature target to host-centric value for stability."""
@@ -43,32 +33,26 @@ def _normalize_signature_target(target: str) -> str:
 
     return clean.split("/")[0].strip().lower()
 
-
-def run() -> int:
-    """Run the autonomous recon agent loop until stop conditions are met."""
-    target = _resolve_target(sys.argv)
-    if not target:
-        print("Target is required.")
-        return 1
-
-    config = AppConfig.from_env()
-    logger = build_logger(log_file=config.log_file)
-    state_manager = StateManager(config.session_file)
-
-    state = state_manager.initialize(target=target, reset=True)
-    logger.info("[INFO] Starting scan for target=%s", target)
-
+def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, memory: Any, state_manager: StateManager):
+    """Run the autonomous recon agent loop, updating memory."""
     iteration = 0
-
+    max_loops = int(getattr(config, "max_iterations", 10))
+    
     while True:
-        if iteration >= int(config.max_iterations):
-            logger.info("[INFO] Max iterations reached (%s).", config.max_iterations)
+        if iteration >= max_loops:
+            logger.info("[INFO] Max iterations reached (%s).", max_loops)
+            msg = f"Scan paused after {max_loops} iterations."
+            print(f"[Agent] {msg}")
+            memory.add_message("agent", msg)
             break
 
-        action = decide_next_action(state)
+        action = decide_next_action(state, config, memory.get_summary(), memory.get_recent(5))
         logger.info("[DECISION] %s", action)
 
         if str(action.get("action", "")).strip().lower() == "stop":
+            msg = f"Scan complete. {action.get('reason', '')}"
+            print(f"[Agent] {msg}")
+            memory.add_message("agent", msg)
             state.setdefault("history", []).append(
                 {
                     "type": "loop-stop",
@@ -83,8 +67,16 @@ def run() -> int:
         if signature not in state.get("actions_taken", []):
             state.setdefault("actions_taken", []).append(signature)
 
+        cmd = action.get("command", "")
+        print(f"[Agent] Running: {cmd}")
         result = execute_action(action, config)
         logger.info("[RESULT] %s", result)
+
+        memory.add_message("tool", f"Command: {cmd}\nOutput: {result.get('output', '')}", metadata={
+            "type": "tool_output",
+            "tool": action.get("action"),
+            "target": action.get("target")
+        })
 
         state = analyze_result(result, state, config)
         no_new_data = _latest_no_new_data(state)
@@ -101,38 +93,129 @@ def run() -> int:
             }
         )
 
-        logger.info(
-            "[STATE] subdomains=%s ports=%s services=%s technologies=%s endpoints=%s vulnerabilities=%s",
-            len(state.get("subdomains", [])),
-            len(state.get("ports", [])),
-            len(state.get("services", [])),
-            len(state.get("technologies", [])),
-            len(state.get("endpoints", [])),
-            len(state.get("vulnerabilities", [])),
-        )
-
         state_manager.persist(state)
         iteration += 1
 
         max_no_data_loops = int(getattr(config, "max_no_data_loops", 3))
         if _no_new_data_streak(state, max_no_data_loops) >= max_no_data_loops:
             logger.info("[INFO] Stopping after %s consecutive loops with no new data.", max_no_data_loops)
+            msg = "Stopping scan due to no new data found in recent steps."
+            print(f"[Agent] {msg}")
+            memory.add_message("agent", msg)
             break
 
         if _has_high_confidence_vulnerability(state, float(getattr(config, "llm_min_confidence_stop", 0.85))):
             logger.info("[INFO] High-confidence vulnerability detected. Stopping autonomous loop.")
+            msg = "High-confidence vulnerability found. Stopping scan early."
+            print(f"[Agent] {msg}")
+            memory.add_message("agent", msg)
             break
 
     state_manager.persist(state)
 
-    report = generate_report(state)
-    print(report)
 
-    report_path = Path("reports") / "final_report.txt"
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(report, encoding="utf-8")
-    logger.info("[INFO] Final report saved to %s", report_path)
+def run() -> int:
+    """Run the interactive Chat CLI."""
+    from core.memory import ConversationMemory
+    from core.memory_llm import summarize_memory
+    from agent.interpreter import classify_intent
+    from agent.qa_handler import answer_follow_up
+    import json
 
+    config = AppConfig.from_env()
+    logger = build_logger(log_file=config.log_file)
+    state_manager = StateManager(config.session_file)
+
+    memory = ConversationMemory()
+    print("=============================================")
+    print("  Deep Recon Cognitive Agent - Chat CLI")
+    print("=============================================")
+    print(f"Loaded session: {memory.session_id}")
+    print("Type /help for meta-commands or just talk naturally.")
+
+    try:
+        with open(config.session_file, "r") as f:
+            state = json.load(f)
+    except Exception:
+        state = state_manager.initialize(target="", reset=True)
+
+    while True:
+        try:
+            user_input = input("\n> ").strip()
+            if not user_input:
+                continue
+            if user_input.lower() in ("exit", "quit"):
+                break
+
+            if user_input.startswith("/"):
+                cmd = user_input.split()[0].lower()
+                if cmd == "/load":
+                    name = user_input[len("/load"):].strip()
+                    if memory.load_session(name):
+                        print(f"[System] Loaded session '{name}'")
+                    else:
+                        print(f"[System] Could not load '{name}'")
+                elif cmd == "/save":
+                    name = user_input[len("/save"):].strip()
+                    if name:
+                        memory.save_session(name)
+                        print(f"[System] Session saved as '{name}'")
+                    else:
+                        print("[System] Please provide a session name.")
+                elif cmd == "/list":
+                    sessions = memory.list_sessions()
+                    print("[System] Available sessions:", ", ".join(sessions) if sessions else "None")
+                elif cmd == "/clear":
+                    memory.clear()
+                    print("[System] Memory cleared.")
+                elif cmd == "/help":
+                    print("[System] Commands: /load <name>, /save <name>, /list, /clear, exit")
+                else:
+                    print(f"[System] Unknown command: {cmd}")
+                continue
+
+            memory.add_message("user", user_input)
+
+            # Interpreter
+            intent_res = classify_intent(user_input, memory.get_summary(), memory.get_recent(5), config)
+            intent = intent_res.get("intent")
+            target = intent_res.get("extracted_target")
+
+            if intent == "new_scan":
+                if target:
+                    state["target"] = target
+                print(f"[Agent] Starting scan on {state.get('target', 'unknown')}...")
+                run_autonomous_scan(state, config, logger, memory, state_manager)
+                
+                # Ask follow up prompt
+                msg = "Scan process ended. What would you like to know?"
+                print(f"[Agent] {msg}")
+                memory.add_message("agent", msg)
+
+            elif intent == "follow_up":
+                response = answer_follow_up(user_input, memory, config)
+                print(f"\n[Agent] {response}")
+                memory.add_message("agent", response)
+
+            elif intent == "meta":
+                print("[Agent] I think that's a system command. Use /load, /save, /list, or /clear.")
+                memory.add_message("agent", "I instructed the user to use / commands.")
+
+            else:
+                response = answer_follow_up(user_input, memory, config)
+                print(f"\n[Agent] {response}")
+                memory.add_message("agent", response)
+
+            memory.compress_if_needed(lambda txt: summarize_memory(txt, config), threshold=20, keep=10)
+
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            logger.error(f"[ERROR] CLI loop: {e}")
+            print(f"\n[Error] {e}")
+
+    memory._auto_save()
+    print("\nSession saved. Exiting.")
     return 0
 
 

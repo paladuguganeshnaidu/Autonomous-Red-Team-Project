@@ -101,7 +101,7 @@ class AppConfig:
     use_llm_planner: bool = False
     ollama_url: str = "http://localhost:11434/api/generate"
     ollama_model: str = "mistral"
-    llm_timeout: int = 45
+    llm_timeout: int = 180
     enable_llm_analysis: bool = True
     llm_min_confidence_stop: float = 0.85
     max_no_data_loops: int = 3
@@ -136,7 +136,7 @@ class AppConfig:
             use_llm_planner=_env_bool("USE_LLM_PLANNER", False),
             ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate"),
             ollama_model=os.getenv("OLLAMA_MODEL", "mistral"),
-            llm_timeout=_env_int("LLM_TIMEOUT", 45),
+            llm_timeout=_env_int("LLM_TIMEOUT", 180),
             enable_llm_analysis=_env_bool("ENABLE_LLM_ANALYSIS", True),
             llm_min_confidence_stop=_env_float("LLM_MIN_CONFIDENCE_STOP", 0.85),
             max_no_data_loops=max(1, _env_int("MAX_NO_DATA_LOOPS", 3)),

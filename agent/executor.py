@@ -41,6 +41,7 @@ def execute_action(action: dict, config: Any) -> dict:
         "run_nmap": _execute_nmap,
         "run_httpx": _execute_httpx,
         "run_dirsearch": _execute_dirsearch,
+        "run_command": _execute_shell_command,
     }
 
     handler = handlers.get(action_name)
@@ -62,7 +63,13 @@ def execute_action(action: dict, config: Any) -> dict:
 
     for attempt in range(1, max_attempts + 1):
         try:
-            data = handler(target, config)
+            if action_name == "run_command":
+                import subprocess
+                command = action.get("command", "")
+                res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
+                data = {"exit_code": res.returncode, "findings": res.stdout[:500]}
+            else:
+                data = handler(target, config)
         except Exception as exc:
             data = {
                 "tool": action_name,
@@ -137,6 +144,15 @@ def _execute_dirsearch(target: str, config: Any) -> Dict[str, Any]:
         max_time=int(getattr(config, "dirsearch_max_time", 90)),
         rate=int(getattr(config, "dirsearch_rate", 25)),
     )
+
+def _execute_shell_command(target: str, config: Any) -> Dict[str, Any]:
+    import subprocess
+    import sys
+    
+    # We cheat here by pulling the command from the current stack/action, 
+    # but since handler only gets target and config, let's actually just return a wrapper
+    # Wait, handler only receives (target, config). We need the command!
+    pass
 
 
 def _normalize_web_target(target: str) -> str:

@@ -43,6 +43,9 @@ def analyze_result(result: dict, state: dict, config: Optional[Any] = None) -> d
     if action_name == "run_dirsearch" and status == "success":
         _merge_dirsearch_data(normalized, data)
 
+    if action_name == "run_command" and status == "success":
+        normalized["latest_command_output"] = data.get("findings", "")
+
     normalized["subdomains"] = _dedupe_str_list(normalized["subdomains"])
     normalized["ports"] = _dedupe_str_list(normalized["ports"])
     normalized["technologies"] = _dedupe_str_list(normalized["technologies"])
@@ -53,9 +56,12 @@ def analyze_result(result: dict, state: dict, config: Optional[Any] = None) -> d
     new_services_found = len(normalized["services"]) > before_services
     new_endpoints_found = len(normalized["endpoints"]) > before_endpoints
 
-    if config is not None and (new_services_found or new_endpoints_found):
+    force_llm = (action_name == "run_command" and status == "success")
+
+    if config is not None and (new_services_found or new_endpoints_found or force_llm):
         llm_output = analyze_with_llm(normalized, config)
         llm_vulns = llm_output.get("vulnerabilities", []) if isinstance(llm_output, dict) else []
+
 
         if isinstance(llm_vulns, list) and llm_vulns:
             normalized["vulnerabilities"].extend(llm_vulns)
@@ -73,6 +79,9 @@ def analyze_result(result: dict, state: dict, config: Optional[Any] = None) -> d
                     "next_actions": [str(item).strip() for item in next_actions if str(item).strip()],
                 }
             )
+            
+    if "latest_command_output" in normalized:
+        del normalized["latest_command_output"]
 
     after_snapshot = _state_counts(normalized)
     no_new_data = before_snapshot == after_snapshot
