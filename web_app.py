@@ -46,7 +46,7 @@ formatter = logging.Formatter("%(message)s")
 ws_handler.setFormatter(formatter)
 logger.addHandler(ws_handler)
 
-def run_scan_in_background(target: str):
+def run_scan_in_background(target: str, session_id: str = None):
     logger.info(f"[SYSTEM] Starting scan for target={target}")
     try:
         config = AppConfig.from_env()
@@ -56,63 +56,20 @@ def run_scan_in_background(target: str):
         state_manager = StateManager(config.session_file)
         state = state_manager.initialize(target=target, reset=True)
         
-        iteration = 0
-        while True:
-            if iteration >= int(config.max_iterations):
-                logger.info("[SYSTEM] Max iterations reached.")
-                break
+        from core.memory import ConversationMemory
+        from main import run_autonomous_scan
+        
+        memory = ConversationMemory()
+        if session_id:
+            memory.load_session(session_id)
+        else:
+            memory.add_message("user", f"Start a new scan on {target}")
 
-            action = decide_next_action(state, config)
-            logger.info(f"[DECISION] {action}")
+        run_autonomous_scan(state, config, logger, memory, state_manager)
+        
+        if session_id:
+            memory.save_session(session_id)
 
-            if str(action.get("action", "")).strip().lower() == "stop":
-                logger.info("[SYSTEM] Planner decided to stop.")
-                state.setdefault("history", []).append({
-                    "type": "loop-stop",
-                    "reason": action.get("reason", "Planner requested stop."),
-                    "score": float(action.get("score", 1.0) or 1.0),
-                })
-                state_manager.persist(state)
-                break
-
-            signature = _action_signature(action)
-            if signature not in state.get("actions_taken", []):
-                state.setdefault("actions_taken", []).append(signature)
-
-            cmd_to_run = action.get('command', '')
-            logger.info(f"[EXECUTING] {cmd_to_run}")
-            result = execute_action(action, config)
-            logger.info(f"[RESULT] {result}")
-
-            state = analyze_result(result, state, config)
-            no_new_data = _latest_no_new_data(state)
-
-            state.setdefault("action_history", []).append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "action": str(action.get("action", "")).strip().lower(),
-                "target": str(action.get("target", "")).strip(),
-                "score": float(action.get("score", 0.0) or 0.0),
-                "reason": str(action.get("reason", "")).strip(),
-                "status": str(result.get("status", "failed")).strip().lower(),
-                "no_new_data": no_new_data,
-            })
-
-            logger.info(f"[STATE] subdomains={len(state.get('subdomains', []))} ports={len(state.get('ports', []))} vulnerabilities={len(state.get('vulnerabilities', []))}")
-
-            state_manager.persist(state)
-            iteration += 1
-
-            max_no_data_loops = int(getattr(config, "max_no_data_loops", 3))
-            if _no_new_data_streak(state, max_no_data_loops) >= max_no_data_loops:
-                logger.info(f"[SYSTEM] Stopping after {max_no_data_loops} loops with no new data.")
-                break
-
-            if _has_high_confidence_vulnerability(state, float(getattr(config, "llm_min_confidence_stop", 0.85))):
-                logger.info("[SYSTEM] High-confidence vulnerability detected. Stopping.")
-                break
-
-        state_manager.persist(state)
-        logger.info("[SYSTEM] Scan completed.")
     except Exception as e:
         logger.info(f"[ERROR] Scan failed: {e}")
 
@@ -129,9 +86,11 @@ async def get():
     with open("web/static/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
 
+from typing import Optional
+
 @app.post("/start")
-async def start_scan(target: str):
-    threading.Thread(target=run_scan_in_background, args=(target,), daemon=True).start()
+async def start_scan(target: str, chat_id: Optional[str] = None):
+    threading.Thread(target=run_scan_in_background, args=(target, chat_id), daemon=True).start()
     return {"message": "Scan started in background."}
 
 from pydantic import BaseModel
@@ -198,7 +157,15 @@ def chat_endpoint(data: ChatMessage):
     except:
         state = {"target": data.target}
         
-    from core.llm import chat_with_agent
+    from core.memory import ConversationMemory
+    from agent.interpreter import classify_intent
+    from agent.qa_handler import answer_follow_up
+    
+    memory = ConversationMemory()
+    if chat_id:
+        memory.load_session(chat_id)
+        
+    memory.add_message("user", data.message)
     
     chat_doc["messages"].append({
         "id": str(uuid.uuid4()),
@@ -207,19 +174,26 @@ def chat_endpoint(data: ChatMessage):
         "timestamp": datetime.now(timezone.utc).isoformat()
     })
     
-    agent_output = chat_with_agent(data.message, state, chat_doc["messages"], config)
+    intent_res = classify_intent(data.message, memory.get_summary(), memory.get_recent(5), config)
+    intent = intent_res.get("intent")
+    extracted_target = intent_res.get("extracted_target")
     
-    if isinstance(agent_output, dict):
-        response_text = agent_output.get("response", str(agent_output))
-        action = agent_output.get("action", "")
-        command = agent_output.get("command", "")
+    command = ""
+    action = ""
+    
+    if intent == "new_scan":
+        if extracted_target:
+            state["target"] = extracted_target
+        response_text = f"Starting new scan on {state.get('target', 'unknown')}...\nIf you want to view the output, you can monitor the background process."
+        action = "start_scan"
+    elif intent == "meta":
+        response_text = "I think that's a system command. (Note: System commands like /load or /save work better in CLI, via Web I sync automatically)."
     else:
-        response_text = str(agent_output)
-        action = ""
-        command = ""
-    
-    if action == "run_command" and command:
-        response_text += f"\n\n**Executing Command:** `{command}`"
+        response_text = answer_follow_up(data.message, memory, config)
+
+    memory.add_message("agent", response_text)
+    if chat_id:
+        memory.save_session(chat_id)
         
     logger.info(f"[CHAT_AGENT] {response_text}")
 
@@ -233,16 +207,8 @@ def chat_endpoint(data: ChatMessage):
     with open(CHATS_DIR / f"{chat_id}.json", "w") as f:
         json.dump(chat_doc, f, indent=2)
         
-    if action == "run_command" and command:
-        def run_copilot_command(cmd, tgt, current_state):
-            logger.info(f"[SYSTEM] Copilot executing: {cmd}")
-            act = {"action": "run_command", "command": cmd, "target": tgt}
-            res = execute_action(act, config)
-            logger.info(f"[RESULT] {res}")
-            new_state = analyze_result(res, current_state, config)
-            StateManager(config.session_file).persist(new_state)
-
-        threading.Thread(target=run_copilot_command, args=(command, data.target, state), daemon=True).start()
+    if action == "start_scan":
+        threading.Thread(target=run_scan_in_background, args=(state.get("target"), chat_id), daemon=True).start()
         
     return {"response": response_text, "chat_id": chat_id, "command": command}
 

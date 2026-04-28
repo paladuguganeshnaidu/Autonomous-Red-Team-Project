@@ -112,6 +112,19 @@ def run_autonomous_scan(state: Dict[str, Any], config: AppConfig, logger: Any, m
             break
 
     state_manager.persist(state)
+    logger.info("[INFO] Autonomous scan complete. Generating final report.")
+    final_report = generate_report(state)
+    
+    # Save the report to reports directory
+    report_path = Path("reports/final_report.txt")
+    report_path.parent.mkdir(exist_ok=True)
+    report_path.write_text(final_report, encoding="utf-8")
+    
+    msg = f"Final Report generated and saved to {report_path}."
+    print(f"[Agent] {msg}")
+    memory.add_message("agent", msg)
+    memory.add_message("agent", final_report)
+
 
 
 def run() -> int:
