@@ -1,39 +1,20 @@
 {
   "target": "toriiminds.com",
   "subdomains": [
-    "frs.toriiminds.com",
-    "www.toriiminds.com"
+    "www.toriiminds.com",
+    "frs.toriiminds.com"
   ],
-  "ports": [
-    "443"
-  ],
-  "services": [
-    {
-      "host": "toriiminds.com",
-      "port": "443",
-      "service": "https"
-    }
-  ],
-  "technologies": [
-    "nginx/1.24.0 (Ubuntu)",
-    "Next.js",
-    "Nginx:1.24.0",
-    "Node.js",
-    "React",
-    "Ubuntu",
-    "Webpack"
-  ],
-  "endpoints": [
-    "https://toriiminds.com"
-  ],
+  "ports": [],
+  "services": [],
+  "technologies": [],
+  "endpoints": [],
   "vulnerabilities": [],
   "actions_taken": [
-    "run_subfinder::toriiminds.com",
-    "run_httpx::toriiminds.com"
+    "run_subfinder::toriiminds.com"
   ],
   "action_history": [
     {
-      "timestamp": "2026-04-28T13:27:15.857693+00:00",
+      "timestamp": "2026-04-29T05:25:33.085262+00:00",
       "action": "run_subfinder",
       "target": "toriiminds.com",
       "score": 0.95,
@@ -41,25 +22,13 @@
       "command": "subfinder -d toriiminds.com -silent",
       "status": "success",
       "summary": "Discovered 2 subdomains.",
-      "duration_sec": 31.64,
-      "no_new_data": false
-    },
-    {
-      "timestamp": "2026-04-28T13:30:25.668768+00:00",
-      "action": "run_httpx",
-      "target": "https://toriiminds.com",
-      "score": 0.9,
-      "reason": "Probe the primary web target to confirm live endpoints and technologies.",
-      "command": "httpx -u https://toriiminds.com",
-      "status": "success",
-      "summary": "Confirmed 1 live web endpoints. Technology signals: Next.js, Nginx:1.24.0, Node.js, React, Ubuntu.",
-      "duration_sec": 7.74,
+      "duration_sec": 11.61,
       "no_new_data": false
     }
   ],
   "history": [
     {
-      "timestamp": "2026-04-28T13:27:15.857647+00:00",
+      "timestamp": "2026-04-29T05:25:33.085208+00:00",
       "type": "action-result",
       "action": "run_subfinder",
       "status": "success",
@@ -74,25 +43,6 @@
         "services": 0,
         "technologies": 0,
         "endpoints": 0,
-        "vulnerabilities": 0
-      }
-    },
-    {
-      "timestamp": "2026-04-28T13:30:25.668667+00:00",
-      "type": "action-result",
-      "action": "run_httpx",
-      "status": "success",
-      "error": null,
-      "attempts": 1,
-      "no_new_data": false,
-      "new_services_found": true,
-      "new_endpoints_found": true,
-      "counts": {
-        "subdomains": 2,
-        "ports": 1,
-        "services": 1,
-        "technologies": 7,
-        "endpoints": 1,
         "vulnerabilities": 0
       }
     }
