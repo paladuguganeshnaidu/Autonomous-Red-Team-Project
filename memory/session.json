@@ -1,8 +1,8 @@
 {
   "target": "toriiminds.com",
   "subdomains": [
-    "www.toriiminds.com",
-    "frs.toriiminds.com"
+    "frs.toriiminds.com",
+    "www.toriiminds.com"
   ],
   "ports": [],
   "services": [],
@@ -14,7 +14,7 @@
   ],
   "action_history": [
     {
-      "timestamp": "2026-04-29T05:25:33.085262+00:00",
+      "timestamp": "2026-04-29T05:51:09.938025+00:00",
       "action": "run_subfinder",
       "target": "toriiminds.com",
       "score": 0.95,
@@ -22,13 +22,13 @@
       "command": "subfinder -d toriiminds.com -silent",
       "status": "success",
       "summary": "Discovered 2 subdomains.",
-      "duration_sec": 11.61,
+      "duration_sec": 22.15,
       "no_new_data": false
     }
   ],
   "history": [
     {
-      "timestamp": "2026-04-29T05:25:33.085208+00:00",
+      "timestamp": "2026-04-29T05:51:09.937989+00:00",
       "type": "action-result",
       "action": "run_subfinder",
       "status": "success",

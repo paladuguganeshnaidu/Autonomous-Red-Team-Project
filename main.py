@@ -329,11 +329,11 @@ def run_autonomous_scan(
 
 def run() -> int:
     """Run the interactive Chat CLI."""
+    import json
+
+    from agent.conversation import ConversationManager
     from core.memory import ConversationMemory
     from core.memory_llm import summarize_memory
-    from agent.interpreter import classify_intent
-    from agent.qa_handler import answer_follow_up
-    import json
 
     config = AppConfig.from_env()
     logger = build_logger(log_file=config.log_file)
@@ -351,6 +351,14 @@ def run() -> int:
             state = json.load(f)
     except Exception:
         state = state_manager.initialize(target="", reset=True)
+
+    conversation = ConversationManager(
+        config=config,
+        logger=logger,
+        memory=memory,
+        state_manager=state_manager,
+        initial_state=state,
+    )
 
     while True:
         try:
@@ -387,37 +395,11 @@ def run() -> int:
                     print(f"[System] Unknown command: {cmd}")
                 continue
 
-            memory.add_message("user", user_input)
+            response = conversation.handle_message(user_input)
+            for message in response.messages:
+                print(f"\n[Agent] {message}")
 
-            # Interpreter
-            intent_res = classify_intent(user_input, memory.get_summary(), memory.get_recent(5), config)
-            intent = intent_res.get("intent")
-            target = intent_res.get("extracted_target")
-
-            if intent == "new_scan":
-                if target:
-                    state["target"] = target
-                print(f"[Agent] Starting scan on {state.get('target', 'unknown')}...")
-                run_autonomous_scan(state, config, logger, memory, state_manager)
-                
-                # Ask follow up prompt
-                msg = "Scan process ended. What would you like to know?"
-                print(f"[Agent] {msg}")
-                memory.add_message("agent", msg)
-
-            elif intent == "follow_up":
-                response = answer_follow_up(user_input, memory, config)
-                print(f"\n[Agent] {response}")
-                memory.add_message("agent", response)
-
-            elif intent == "meta":
-                print("[Agent] I think that's a system command. Use /load, /save, /list, or /clear.")
-                memory.add_message("agent", "I instructed the user to use / commands.")
-
-            else:
-                response = answer_follow_up(user_input, memory, config)
-                print(f"\n[Agent] {response}")
-                memory.add_message("agent", response)
+            conversation.state = state_manager.load()
 
             memory.compress_if_needed(lambda txt: summarize_memory(txt, config), threshold=20, keep=10)
 

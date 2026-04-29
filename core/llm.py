@@ -1,11 +1,90 @@
-"""LLM-assisted vulnerability intelligence backed by Ollama/Mistral."""
+"""Shared LLM prompt helpers backed by the robust client."""
 
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List
 
-import requests
+from core.llm_client import LLMUnavailableError, get_llm_client
+
+
+logger = logging.getLogger("autonomous_recon")
+
+
+def generate_text(
+    prompt: str,
+    config: Any,
+    *,
+    system: str = "",
+    options: Dict[str, Any] | None = None,
+    max_retries: int | None = None,
+) -> str:
+    """Generate text from the configured LLM backend."""
+    logger.info("[LLM_PROMPT] %s", prompt)
+    client = get_llm_client(config)
+    try:
+        output = client.generate(
+            prompt,
+            system=system,
+            options=options,
+            max_retries=max_retries,
+            timeout=(
+                int(getattr(config, "llm_connect_timeout", 5)),
+                int(getattr(config, "llm_read_timeout", 30)),
+            ),
+            stream=True,
+        )
+        logger.info("[LLM_RESPONSE] %s", output)
+        return output
+    except LLMUnavailableError as exc:
+        logger.error("[ERROR] LLM request failed: %s", exc)
+        raise
+
+
+def generate_json(
+    prompt: str,
+    config: Any,
+    *,
+    system: str = "",
+    options: Dict[str, Any] | None = None,
+    default: Dict[str, Any] | None = None,
+    max_retries: int | None = None,
+) -> Dict[str, Any]:
+    """Generate JSON from the configured LLM backend with safe fallback parsing."""
+    default_payload = default or {}
+    try:
+        text = generate_text(
+            prompt,
+            config,
+            system=system,
+            options=options,
+            max_retries=max_retries,
+        )
+    except LLMUnavailableError as exc:
+        payload = dict(default_payload)
+        payload.setdefault("error", str(exc))
+        return payload
+
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    cleaned = text[start:end] if start != -1 and end > start else "{}"
+
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        payload = dict(default_payload)
+        payload.setdefault("error", f"Failed to parse JSON response: {exc}")
+        payload.setdefault("raw_response", text)
+        return payload
+
+    if not isinstance(parsed, dict):
+        payload = dict(default_payload)
+        payload.setdefault("error", "LLM returned non-dictionary JSON.")
+        payload.setdefault("raw_response", text)
+        return payload
+
+    return parsed
 
 
 def analyze_with_llm(state: dict, config: Any) -> dict:
@@ -15,49 +94,139 @@ Analyze the following scan results:
 
 {json.dumps(state, indent=2)}
 
-Identify realistic vulnerabilities.
-Return STRICT JSON.
+Identify realistic vulnerabilities and practical next actions.
+Return STRICT JSON in the form:
+{{
+  "vulnerabilities": [
+    {{
+      "name": "<finding title>",
+      "target": "<host or URL>",
+      "evidence": "<supporting evidence>",
+      "severity": "<critical|high|medium|low|info>",
+      "confidence": <0.0-1.0>,
+      "reasoning": "<why this matters>",
+      "fix": "<remediation advice>"
+    }}
+  ],
+  "next_actions": ["<next step>"]
+}}
 """
-    import logging
-    logger = logging.getLogger("autonomous_recon")
-    logger.info("[LLM_PROMPT] %s", prompt)
+    parsed = generate_json(
+        prompt,
+        config,
+        default={"vulnerabilities": [], "next_actions": []},
+        options={"num_predict": 400},
+    )
 
-    try:
-        response = requests.post(
-            str(getattr(config, "ollama_url", "http://localhost:11434/api/generate")),
-            json={
-                "model": str(getattr(config, "ollama_model", "mistral")),
-                "prompt": prompt,
-                "stream": False,
-            },
-            timeout=int(getattr(config, "llm_timeout", 180)),
-        )
-        response.raise_for_status()
+    vulnerabilities = _normalize_vulnerabilities(parsed.get("vulnerabilities", []), state)
+    next_actions = _normalize_next_actions(parsed.get("next_actions", []))
+    result = {
+        "vulnerabilities": vulnerabilities,
+        "next_actions": next_actions,
+    }
+    if parsed.get("error"):
+        result["error"] = str(parsed.get("error"))
+    return result
 
-        output = str(response.json().get("response", ""))
-        logger.info("[LLM_RESPONSE] %s", output)
 
-        start = output.find("{")
-        end = output.rfind("}") + 1
-        cleaned = output[start:end] if start != -1 and end > start else "{}"
+def plan_with_llm(
+    state: dict,
+    config: Any,
+    memory_summary: str = "",
+    recent_messages: List[Dict[str, Any]] | None = None,
+) -> dict:
+    """Use LLM to plan the exact OS command to execute next."""
+    recent_messages = recent_messages or []
 
-        parsed = json.loads(cleaned)
-        if not isinstance(parsed, dict):
-            return {"vulnerabilities": [], "next_actions": []}
+    context_str = f"Session Summary:\n{memory_summary}\n\nRecent Memory:\n" if memory_summary else "Recent Memory:\n"
+    for msg in recent_messages[-5:]:
+        context_str += f"{msg['role'].upper()}: {msg['content']}\n"
 
-        vulnerabilities = _normalize_vulnerabilities(parsed.get("vulnerabilities", []), state)
-        next_actions = _normalize_next_actions(parsed.get("next_actions", []))
+    prompt = f"""
+You are an autonomous red team agent. Your goal is to map the attack surface and find vulnerabilities.
+Current State:
+{json.dumps(state, indent=2)}
 
+{context_str}
+
+Decide the single next best terminal command to run to increase the level of scanning.
+You can use tools like nmap, subfinder, httpx, ffuf, curl, dig, etc.
+Return a STRICT JSON object with the following schema:
+{{
+  "action": "run_command",
+  "command": "<exact shell command to execute>",
+  "target": "<the target of the command>",
+  "reason": "<why this command is useful>"
+}}
+"""
+    parsed = generate_json(
+        prompt,
+        config,
+        default={"action": "stop", "reason": "Planner failed to return valid JSON.", "score": 1.0},
+        options={"num_predict": 250},
+    )
+
+    if parsed.get("command"):
         return {
-            "vulnerabilities": vulnerabilities,
-            "next_actions": next_actions,
+            "action": "run_command",
+            "command": str(parsed.get("command", "")).strip(),
+            "target": str(parsed.get("target", state.get("target", ""))).strip(),
+            "reason": str(parsed.get("reason", "Decided by LLM")).strip(),
+            "score": 1.0,
         }
-    except Exception as exc:
-        return {
-            "vulnerabilities": [],
-            "next_actions": [],
-            "error": str(exc),
-        }
+
+    error = str(parsed.get("error", "")).strip()
+    if error:
+        return {"action": "stop", "reason": error, "score": 1.0}
+    return {"action": "stop", "reason": "Failed to parse valid JSON from LLM for planning.", "score": 1.0}
+
+
+def chat_with_agent(message: str, state: dict, history: list, config: Any) -> Dict[str, Any]:
+    """Send a user message to the LLM with the current recon state as context."""
+    context_str = json.dumps(
+        {
+            "target": state.get("target"),
+            "subdomains_count": len(state.get("subdomains", [])),
+            "subdomains_sample": state.get("subdomains", [])[:5],
+            "ports": state.get("ports", []),
+            "vulnerabilities": state.get("vulnerabilities", [])[:5],
+            "summary": state.get("summary", "No summary available."),
+        },
+        indent=2,
+    )
+
+    prompt = f"""You are an elite autonomous red team agent. You are discussing the current security assessment with your human operator.
+Keep your answers concise, direct, and under 3 sentences unless asked for details.
+If the operator asks you to execute a command, scan, or perform an action, provide the appropriate shell command.
+ALWAYS respond with a STRICT JSON object matching this exact schema:
+{{
+  "response": "<your conversational reply to the user>",
+  "action": "<'run_command' if there is a command to execute, else ''>",
+  "command": "<the exact shell command to run, if applicable, else ''>"
+}}
+
+Current Assessment State:
+{context_str}
+
+Recent Conversation:
+"""
+    for msg in history[-5:]:
+        prompt += f"{msg['role'].upper()}: {msg['content']}\n"
+    prompt += f"USER: {message}\nAGENT:"
+
+    logger.info("[CHAT_USER] %s", message)
+    parsed = generate_json(
+        prompt,
+        config,
+        default={"response": "", "action": "", "command": ""},
+        options={"num_predict": 180},
+    )
+    return {
+        "response": str(parsed.get("response", "")).strip(),
+        "action": str(parsed.get("action", "")).strip(),
+        "command": str(parsed.get("command", "")).strip(),
+        **({"error": str(parsed.get("error"))} if parsed.get("error") else {}),
+    }
 
 
 def _normalize_vulnerabilities(values: Any, state: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -125,137 +294,3 @@ def _normalize_next_actions(values: Any) -> List[str]:
         if clean and clean not in normalized:
             normalized.append(clean)
     return normalized
-
-def plan_with_llm(state: dict, config: Any, memory_summary: str = "", recent_messages: List[Dict[str, Any]] = None) -> dict:
-    """Use LLM to plan the exact OS command to execute next."""
-    recent_messages = recent_messages or []
-    
-    context_str = f"Session Summary:\n{memory_summary}\n\nRecent Memory:\n" if memory_summary else "Recent Memory:\n"
-    for m in recent_messages[-5:]:
-        context_str += f"{m['role'].upper()}: {m['content']}\n"
-        
-    prompt = f"""
-You are an autonomous red team agent. Your goal is to map the attack surface and find vulnerabilities.
-Current State:
-{json.dumps(state, indent=2)}
-
-{context_str}
-
-Decide the single next best terminal command to run to increase the level of scanning.
-You can use tools like nmap, subfinder, httpx, ffuf, curl, dig, etc.
-Return a STRICT JSON object with the following schema:
-{{
-  "action": "run_command",
-  "command": "<exact shell command to execute>",
-  "target": "<the target of the command>",
-  "reason": "<why this command is useful>"
-}}
-"""
-    import logging
-    logger = logging.getLogger("autonomous_recon")
-    logger.info("[LLM_PROMPT] %s", prompt)
-
-    try:
-        response = requests.post(
-            str(getattr(config, "ollama_url", "http://localhost:11434/api/generate")),
-            json={
-                "model": str(getattr(config, "ollama_model", "mistral")),
-                "prompt": prompt,
-                "stream": False,
-            },
-            timeout=int(getattr(config, "llm_timeout", 180)),
-        )
-        response.raise_for_status()
-
-        output = str(response.json().get("response", ""))
-        logger.info("[LLM_RESPONSE] %s", output)
-
-        start = output.find("{")
-        end = output.rfind("}") + 1
-        cleaned = output[start:end] if start != -1 and end > start else "{}"
-
-        parsed = json.loads(cleaned)
-        if not isinstance(parsed, dict) or "command" not in parsed:
-            return {"action": "stop", "reason": "Failed to parse valid JSON from LLM for planning.", "score": 1.0}
-
-        return {
-            "action": "run_command",
-            "command": parsed.get("command", ""),
-            "target": parsed.get("target", state.get("target", "")),
-            "reason": parsed.get("reason", "Decided by LLM"),
-            "score": 1.0
-        }
-    except Exception as exc:
-        logger.error(f"[ERROR] LLM planning failed: {exc}")
-        return {"action": "stop", "reason": f"LLM error: {exc}", "score": 1.0}
-
-def chat_with_agent(message: str, state: dict, history: list, config: Any) -> Any:
-    """Send a user message to the LLM with the current recon state as context.
-    Returns a dict with 'response', 'action', and 'command' keys."""
-    
-    # Build context from state, truncating large lists to save context size
-    context_str = json.dumps({
-        "target": state.get("target"),
-        "subdomains_count": len(state.get("subdomains", [])),
-        "subdomains_sample": state.get("subdomains", [])[:5],
-        "ports": state.get("ports", []),
-        "vulnerabilities": state.get("vulnerabilities", [])[:5]
-    }, indent=2)
-
-    # Include simplified summary in the context string
-    simplified_summary = state.get("summary", "No summary available.")
-    context_str += f"\nSimplified Summary:\n{simplified_summary}\n"
-
-    prompt = f"""You are an elite autonomous red team agent. You are discussing the current security assessment with your human operator. Keep your answers concise, direct, and under 3 sentences unless asked for details.
-If the operator asks you to execute a command, scan, or perform an action, provide the appropriate shell command.
-ALWAYS respond with a STRICT JSON object matching this exact schema:
-{{
-  "response": "<your conversational reply to the user>",
-  "action": "<'run_command' if there is a command to execute, else ''>",
-  "command": "<the exact shell command to run, if applicable, else ''>"
-}}
-
-Current Assessment State:
-{context_str}
-
-Recent Conversation:
-"""
-    for msg in history[-5:]: # Keep last 5 messages for context
-        prompt += f"{msg['role'].upper()}: {msg['content']}\n"
-    
-    prompt += f"USER: {message}\nAGENT:"
-
-    import logging
-    logger = logging.getLogger("autonomous_recon")
-    logger.info(f"[CHAT_USER] {message}")
-
-    try:
-        response = requests.post(
-            str(getattr(config, "ollama_url", "http://localhost:11434/api/generate")),
-            json={
-                "model": str(getattr(config, "ollama_model", "mistral")),
-                "prompt": prompt,
-                "stream": False,
-                "options": {
-                    "num_predict": 150
-                }
-            },
-            timeout=int(getattr(config, "llm_timeout", 180)),
-        )
-        response.raise_for_status()
-
-        output = str(response.json().get("response", "")).strip()
-        logger.info(f"[CHAT_AGENT_RAW] {output}")
-        
-        start = output.find("{")
-        end = output.rfind("}") + 1
-        if start != -1 and end > start:
-            cleaned = output[start:end]
-            parsed = json.loads(cleaned)
-            return parsed
-        else:
-            return {"response": output, "action": "", "command": ""}
-
-    except Exception as exc:
-        logger.error(f"[ERROR] LLM chat failed: {exc}")
-        return {"response": f"Error communicating with LLM: {exc}", "action": "", "command": ""}

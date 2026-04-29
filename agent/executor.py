@@ -1,18 +1,16 @@
-"""Action executor that maps planner decisions to concrete tool calls."""
+"""Tool executor supporting both legacy actions and conversational intents."""
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from dataclasses import asdict
+from typing import Any, Dict
 from urllib.parse import urlparse
 
-from tools.dirsearch_tool import run_dirsearch
-from tools.httpx_tool import run_httpx_probe
-from tools.nmap_tool import run_nmap
-from tools.subdomain_tool import run_subdomain_enum
+from tools.registry import TOOL_MAP, ToolResult
 
 
-def execute_action(action: dict, config: Any) -> dict:
-    """Execute one planner action and return a structured JSON result."""
+def execute_action(action: Dict[str, Any], config: Any) -> Dict[str, Any]:
+    """Execute one legacy planner action and return a structured JSON result."""
     action_name = str(action.get("action", "")).strip().lower()
     target = str(action.get("target", "")).strip()
 
@@ -36,17 +34,15 @@ def execute_action(action: dict, config: Any) -> dict:
             "attempts": 1,
         }
 
-    handlers: Dict[str, Callable[[str, Any], Dict[str, Any]]] = {
-        "run_subfinder": _execute_subfinder,
-        "run_nmap": _execute_nmap,
-        "run_httpx": _execute_httpx,
-        "run_dirsearch": _execute_dirsearch,
-        "run_command": _execute_shell_command,
-        "read_file": lambda t, c: {},  # Handled inline
+    legacy_map = {
+        "run_subfinder": "subfinder",
+        "run_nmap": "nmap",
+        "run_httpx": "httpx",
+        "run_dirsearch": "ffuf",
+        "run_command": "shell",
     }
-
-    handler = handlers.get(action_name)
-    if handler is None:
+    tool_name = legacy_map.get(action_name)
+    if not tool_name:
         return {
             "status": "failed",
             "action": action_name,
@@ -56,113 +52,85 @@ def execute_action(action: dict, config: Any) -> dict:
             "attempts": 0,
         }
 
-    retries = min(2, max(0, int(getattr(config, "command_retries", 2))))
-    max_attempts = retries + 1
+    intent = {
+        "primary_tool": tool_name,
+        "target": _normalize_target_for_tool(tool_name, target),
+        "command": str(action.get("command", "")).strip(),
+        "resolved_args": action.get("resolved_args", []),
+    }
+    result = execute_intent(intent, config)
+    return _tool_result_to_action_result(action_name, target, result)
 
-    last_error = "Unknown execution failure"
-    last_data: Dict[str, Any] = {}
 
-    for attempt in range(1, max_attempts + 1):
-        try:
-            if action_name == "run_command":
-                import subprocess
-                command = action.get("command", "")
-                res = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=120)
-                data = {"exit_code": res.returncode, "findings": res.stdout[:2000] + res.stderr[:2000]}
-            elif action_name == "read_file":
-                file_path = action.get("command", "") or action.get("target", "")
-                # Security limit scope to local workspace
-                import os
-                if ".." in file_path or file_path.startswith("/") or file_path.startswith("\\"):
-                    data = {"exit_code": -1, "findings": "Relative or absolute pathing denied for safety."}
-                else:
-                    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                        data = {"exit_code": 0, "findings": f.read()[-5000:]} # Cap size to 5k
-            else:
-                data = handler(target, config)
-        except Exception as exc:
-            data = {
-                "tool": action_name,
-                "exit_code": -1,
-                "error": str(exc),
-            }
+def execute_intent(intent: Dict[str, Any], config: Any) -> ToolResult:
+    """Execute a parsed conversational intent through the tool registry."""
+    tool_name = str(intent.get("primary_tool", "")).strip().lower()
+    tool = TOOL_MAP.get(tool_name)
+    target = str(intent.get("target", "")).strip()
 
-        if _tool_succeeded(data):
-            return {
-                "status": "success",
-                "action": action_name,
-                "target": target,
-                "data": data,
-                "error": None,
-                "attempts": attempt,
-            }
+    if tool is None:
+        return ToolResult(
+            tool=tool_name or "unknown",
+            target=target,
+            command="",
+            exit_code=-1,
+            raw_output="",
+            duration_sec=0.0,
+            data={},
+            error=f"Unsupported tool requested: {tool_name}",
+        )
 
-        last_data = data
-        last_error = str(data.get("error", "Tool returned no success signals."))
+    try:
+        return tool.run(intent, config)
+    except OSError as exc:
+        return ToolResult(
+            tool=tool_name,
+            target=target,
+            command=str(intent.get("command", "")),
+            exit_code=-1,
+            raw_output="",
+            duration_sec=0.0,
+            data={},
+            error=f"Tool process failed: {exc}",
+        )
+    except Exception as exc:
+        return ToolResult(
+            tool=tool_name,
+            target=target,
+            command=str(intent.get("command", "")),
+            exit_code=-1,
+            raw_output="",
+            duration_sec=0.0,
+            data={},
+            error=str(exc),
+        )
 
+
+def _tool_result_to_action_result(action_name: str, target: str, result: ToolResult) -> Dict[str, Any]:
+    """Convert a registry tool result into the legacy action result envelope."""
+    data = dict(result.data)
+    data.setdefault("command", result.command)
+    data.setdefault("raw_output", result.raw_output)
+    data.setdefault("duration_sec", result.duration_sec)
+    data.setdefault("exit_code", result.exit_code)
+
+    success = _tool_succeeded(data)
     return {
-        "status": "failed",
+        "status": "success" if success else "failed",
         "action": action_name,
         "target": target,
-        "data": last_data,
-        "error": last_error,
-        "attempts": max_attempts,
+        "data": data,
+        "error": None if success else (result.error or "Tool returned no success signals."),
+        "attempts": 1,
     }
 
 
-def _execute_subfinder(target: str, config: Any) -> Dict[str, Any]:
-    """Execute subdomain enumeration for the requested target."""
-    return run_subdomain_enum(
-        domain=target,
-        subfinder_path=getattr(config, "subfinder_path", "subfinder"),
-        timeout=int(getattr(config, "command_timeout", 120)),
-    )
-
-
-def _execute_nmap(target: str, config: Any) -> Dict[str, Any]:
-    """Execute nmap service discovery for the requested target."""
-    return run_nmap(
-        target=target,
-        nmap_path=getattr(config, "nmap_path", "nmap"),
-        timeout=int(getattr(config, "command_timeout", 120)),
-    )
-
-
-def _execute_httpx(target: str, config: Any) -> Dict[str, Any]:
-    """Execute HTTP probing and technology checks for a web target."""
-    normalized_url = _normalize_web_target(target)
-    user_agents = getattr(config, "user_agents", []) or ["AutonomousReconAgent/1.0"]
-
-    return run_httpx_probe(
-        urls=[normalized_url],
-        httpx_path=getattr(config, "httpx_path", "httpx"),
-        timeout=int(getattr(config, "request_timeout", 10)),
-        user_agent=user_agents[0],
-    )
-
-
-def _execute_dirsearch(target: str, config: Any) -> Dict[str, Any]:
-    """Execute directory/content discovery for a web target."""
-    normalized_url = _normalize_web_target(target)
-
-    return run_dirsearch(
-        base_url=normalized_url,
-        ffuf_path=getattr(config, "ffuf_path", "ffuf"),
-        wordlist=getattr(config, "dirsearch_wordlist", ""),
-        match_codes=getattr(config, "dirsearch_match_codes", "200,204,301,302,307,401,403"),
-        timeout=int(getattr(config, "command_timeout", 120)),
-        max_time=int(getattr(config, "dirsearch_max_time", 90)),
-        rate=int(getattr(config, "dirsearch_rate", 25)),
-    )
-
-def _execute_shell_command(target: str, config: Any) -> Dict[str, Any]:
-    import subprocess
-    import sys
-    
-    # We cheat here by pulling the command from the current stack/action, 
-    # but since handler only gets target and config, let's actually just return a wrapper
-    # Wait, handler only receives (target, config). We need the command!
-    pass
+def _normalize_target_for_tool(tool_name: str, target: str) -> str:
+    """Normalize target based on tool expectations."""
+    clean = str(target or "").strip()
+    if tool_name in {"httpx", "ffuf", "dirsearch"}:
+        return _normalize_web_target(clean)
+    return clean
 
 
 def _normalize_web_target(target: str) -> str:
@@ -202,7 +170,10 @@ def _tool_succeeded(data: Dict[str, Any]) -> bool:
             if int(response.get("status_code", 0) or 0) > 0:
                 return True
 
-    if data.get("findings"):
+    findings = data.get("findings")
+    if isinstance(findings, list) and findings:
+        return True
+    if isinstance(findings, str) and findings.strip():
         return True
 
     return False

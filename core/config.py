@@ -102,6 +102,9 @@ class AppConfig:
     ollama_url: str = "http://localhost:11434/api/generate"
     ollama_model: str = "mistral"
     llm_timeout: int = 180
+    llm_connect_timeout: int = 5
+    llm_read_timeout: int = 30
+    llm_max_retries: int = 3
     enable_llm_analysis: bool = True
     llm_min_confidence_stop: float = 0.85
     max_no_data_loops: int = 3
@@ -137,6 +140,9 @@ class AppConfig:
             ollama_url=os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate"),
             ollama_model=os.getenv("OLLAMA_MODEL", "mistral"),
             llm_timeout=_env_int("LLM_TIMEOUT", 180),
+            llm_connect_timeout=max(1, _env_int("LLM_CONNECT_TIMEOUT", 5)),
+            llm_read_timeout=max(5, _env_int("LLM_READ_TIMEOUT", 30)),
+            llm_max_retries=max(1, _env_int("LLM_MAX_RETRIES", 3)),
             enable_llm_analysis=_env_bool("ENABLE_LLM_ANALYSIS", True),
             llm_min_confidence_stop=_env_float("LLM_MIN_CONFIDENCE_STOP", 0.85),
             max_no_data_loops=max(1, _env_int("MAX_NO_DATA_LOOPS", 3)),

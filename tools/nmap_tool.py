@@ -5,10 +5,15 @@ from __future__ import annotations
 import re
 import subprocess
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 
-def run_nmap(target: str, nmap_path: str = "nmap", timeout: int = 120) -> Dict[str, Any]:
+def run_nmap(
+    target: str,
+    nmap_path: str = "nmap",
+    timeout: int = 120,
+    extra_args: Sequence[str] | None = None,
+) -> Dict[str, Any]:
     """Run nmap service detection and return structured JSON-compatible output."""
     clean_target = str(target or "").strip()
     if not clean_target:
@@ -22,7 +27,9 @@ def run_nmap(target: str, nmap_path: str = "nmap", timeout: int = 120) -> Dict[s
             "duration_sec": 0,
         }
 
-    command = [nmap_path, "-sV", "-Pn", clean_target]
+    command = [nmap_path]
+    command.extend([str(arg).strip() for arg in (extra_args or ["-sV", "-Pn"]) if str(arg).strip()])
+    command.append(clean_target)
     started = time.time()
 
     try:
@@ -39,7 +46,7 @@ def run_nmap(target: str, nmap_path: str = "nmap", timeout: int = 120) -> Dict[s
             "tool": "nmap",
             "exit_code": completed.returncode,
             "error": "",
-            "ports": _parse_ports(raw_output),
+            "ports": _parse_ports(raw_output, clean_target),
             "raw_output": raw_output,
             "command": " ".join(command),
             "duration_sec": round(time.time() - started, 2),
@@ -60,7 +67,7 @@ def run_nmap(target: str, nmap_path: str = "nmap", timeout: int = 120) -> Dict[s
             "tool": "nmap",
             "exit_code": -1,
             "error": f"nmap timed out after {timeout}s",
-            "ports": _parse_ports(partial),
+            "ports": _parse_ports(partial, clean_target),
             "raw_output": partial,
             "command": " ".join(command),
             "duration_sec": round(time.time() - started, 2),
@@ -77,12 +84,13 @@ def run_nmap(target: str, nmap_path: str = "nmap", timeout: int = 120) -> Dict[s
         }
 
 
-def _parse_ports(raw_output: str) -> List[Dict[str, str]]:
+def _parse_ports(raw_output: str, host: str) -> List[Dict[str, str]]:
     """Parse open port lines from nmap text output."""
     parsed: List[Dict[str, str]] = []
     for match in re.finditer(r"(\d{1,5})/(tcp|udp)\s+open\s+([^\s]+)", raw_output or ""):
         parsed.append(
             {
+                "host": host,
                 "port": match.group(1),
                 "protocol": match.group(2),
                 "state": "open",
