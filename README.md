@@ -1,153 +1,47 @@
 # Autonomous Red Team
 
-Autonomous Red Team is a Python-based reconnaissance and vulnerability intelligence agent for authorized security assessments.
-It automates reconnaissance, prioritizes actions with a planner, enriches findings with LLM analysis, and produces a practical human-readable report.
+A Python reconnaissance and vulnerability-intelligence agent for authorized security assessments. It coordinates discovery tools, maintains session state, enriches findings with an optional Ollama-compatible model, and writes human-readable reports.
 
-## Features
+## Capabilities
 
-- Autonomous planning loop (`planner -> executor -> analyzer`)
-- Recon collection for:
-  - subdomains
-  - open ports/services
-  - web endpoints/technology signals
-- LLM-assisted vulnerability reasoning (Ollama-compatible)
-- Actionable report generation with:
-  - vulnerability breakdown
-  - security weakness mapping
-  - practical next steps
-- Persistent session state for iterative runs
+- Subdomain, service, endpoint, and technology discovery.
+- Planner → executor → analyzer workflow.
+- Optional LLM-assisted finding enrichment.
+- Persistent session state and structured reports.
+- Configurable timeouts, retries, and iteration limits.
 
-## Architecture (Text Diagram)
+## Architecture
 
-```
+```text
 main.py
-  |
-  +--> core/config.py          (runtime configuration)
-  +--> core/logger.py          (session logging)
-  +--> core/state_manager.py   (state persistence)
-  +--> agent/planner.py        (next action selection)
-  +--> agent/executor.py       (tool execution wrapper)
-  +--> agent/analyzer.py       (state merge + vuln enrichment)
-  +--> tools/subdomain_tool.py (subfinder wrapper)
-  +--> tools/nmap_tool.py      (nmap wrapper)
-  +--> tools/httpx_tool.py     (httpx + header posture checks)
-  +--> tools/dirsearch_tool.py (ffuf-based directory discovery)
-  +--> reporting/report_generator.py (final actionable report)
-```
-
-## Project Layout
-
-```
-autonomous_red_team/
-|
-|-- core/
-|   |-- config.py
-|   |-- logger.py
-|   |-- llm.py
-|   |-- state_manager.py
-|
-|-- agent/
-|   |-- planner.py
-|   |-- executor.py
-|   |-- analyzer.py
-|
-|-- tools/
-|   |-- nmap_tool.py
-|   |-- subdomain_tool.py
-|   |-- httpx_tool.py
-|   |-- dirsearch_tool.py
-|
-|-- reporting/
-|   |-- report_generator.py
-|
-|-- memory/
-|   `-- session.json
-|
-|-- logs/
-|   `-- session.log
-|
-|-- reports/
-|   `-- final_report.txt
-|
-|-- wordlists/
-|   `-- fuzz_wordlist.txt
-|
-|-- main.py
-|-- requirements.txt
-|-- .gitignore
-`-- README.md
+ ├─ core/       configuration, logging, state, LLM adapter
+ ├─ agent/      planner, executor, analyzer
+ ├─ tools/      subfinder, nmap, httpx, and ffuf wrappers
+ └─ reporting/  final report generation
 ```
 
 ## Setup
 
-1. Create and activate a Python environment.
-
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-2. Install dependencies.
-
-```powershell
+.\\.venv\\Scripts\\Activate.ps1
 pip install -r requirements.txt
 ```
 
-3. Ensure external tools are installed and available in PATH:
+Install the external tools used by the configured workflow (`subfinder`, `nmap`, `httpx`, and `ffuf`) and ensure they are available on `PATH`.
 
-- `subfinder`
-- `nmap`
-- `httpx`
-- `ffuf`
-
-4. Optional LLM setup (for vulnerability enrichment):
-
-- Start Ollama locally
-- Pull the configured model (default: `mistral`)
-
-5. Run the agent:
+## Run
 
 ```powershell
 python main.py example.com
 ```
 
-## Example Report Output
+Optional Ollama settings are controlled through `core/config.py` and environment variables such as `OLLAMA_URL`, `OLLAMA_MODEL`, `MAX_ITERATIONS`, and `COMMAND_TIMEOUT`.
 
-```text
-==============================
-AUTONOMOUS RED TEAM REPORT
-==========================
+## Safety
 
-Target: example.com
+Use only against systems you own or are explicitly authorized to test. Keep scans within written scope, avoid disruptive options against production systems, and treat collected findings and logs as sensitive.
 
---- Recon Summary ---
-Subdomains: 2
-Open Ports: 4
-Services: 5
-Endpoints: 3
+## License
 
---- Vulnerabilities Found ---
-[MEDIUM] Sensitive path exposure candidate
-Target: example.com
-Evidence: Discovered path 'admin?param' with status 200
-...
-```
-
-## Configuration Notes
-
-Runtime settings are controlled in `core/config.py` and by environment variables.
-Common settings:
-
-- `MAX_ITERATIONS`
-- `COMMAND_TIMEOUT`
-- `COMMAND_RETRIES`
-- `OLLAMA_URL`
-- `OLLAMA_MODEL`
-- `LLM_TIMEOUT`
-- `DIRSEARCH_WORDLIST`
-
-## Disclaimer
-
-This project is for educational use and authorized security testing only.
-Do not scan or test systems without explicit written permission.
-The authors and users are responsible for legal and ethical usage.
+See [LICENSE](LICENSE) if present.
