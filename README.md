@@ -1,47 +1,96 @@
 # Autonomous Red Team
 
-A Python reconnaissance and vulnerability-intelligence agent for authorized security assessments. It coordinates discovery tools, maintains session state, enriches findings with an optional Ollama-compatible model, and writes human-readable reports.
+A Python reconnaissance and vulnerability-intelligence agent for **authorized security assessments**. The project coordinates reconnaissance tools, maintains state, optionally enriches findings with an Ollama-compatible model, and produces human-readable reports.
+
+> **Authorized-use only:** run the project only against systems you own or are explicitly authorized to test.
 
 ## Capabilities
 
-- Subdomain, service, endpoint, and technology discovery.
+- Subdomain discovery.
+- Service and endpoint discovery.
+- Technology discovery.
 - Planner → executor → analyzer workflow.
 - Optional LLM-assisted finding enrichment.
-- Persistent session state and structured reports.
-- Configurable timeouts, retries, and iteration limits.
+- Persistent session state.
+- Structured reporting.
+- Configurable command timeouts, retries and iteration limits.
 
 ## Architecture
 
 ```text
 main.py
- ├─ core/       configuration, logging, state, LLM adapter
- ├─ agent/      planner, executor, analyzer
- ├─ tools/      subfinder, nmap, httpx, and ffuf wrappers
- └─ reporting/  final report generation
+ ├── core/       configuration, logging, state, LLM adapter
+ ├── agent/      planner, executor, analyzer
+ ├── tools/      subfinder, nmap, httpx and ffuf wrappers
+ └── reporting/  report generation
 ```
 
-## Setup
+## Requirements
+
+- Python virtual environment.
+- Python dependencies from requirements.txt.
+- External tools used by the configured workflow: subfinder, nmap, httpx and ffuf.
+- Ollama is optional for LLM-assisted enrichment.
+
+Install Python dependencies:
 
 ```powershell
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Install the external tools used by the configured workflow (`subfinder`, `nmap`, `httpx`, and `ffuf`) and ensure they are available on `PATH`.
+The checked requirements.txt currently contains requests, FastAPI, Uvicorn and WebSockets. The external security tools are installed separately.
 
-## Run
+## Configuration
+
+The repository documents settings including OLLAMA_URL, OLLAMA_MODEL, MAX_ITERATIONS and COMMAND_TIMEOUT.
+
+Inspect core/config.py for authoritative configuration names and defaults.
+
+Do not commit credentials or private assessment data.
+
+## Usage
+
+The documented entry point is:
 
 ```powershell
 python main.py example.com
 ```
 
-Optional Ollama settings are controlled through `core/config.py` and environment variables such as `OLLAMA_URL`, `OLLAMA_MODEL`, `MAX_ITERATIONS`, and `COMMAND_TIMEOUT`.
+Only substitute a target that is within your written authorization scope.
 
 ## Safety
 
-Use only against systems you own or are explicitly authorized to test. Keep scans within written scope, avoid disruptive options against production systems, and treat collected findings and logs as sensitive.
+This project can invoke security-reconnaissance tooling. Safe operation therefore depends on target authorization and scan configuration.
+
+Before an engagement:
+
+- Define target scope and excluded hosts in writing.
+- Prefer non-disruptive scan modes against production.
+- Restrict timeouts and iteration limits.
+- Treat reports, logs and discovered endpoints as sensitive.
+- Do not use collected credentials or secrets outside the authorized assessment.
+
+## Testing and performance
+
+No formal coverage percentage, P95/P99 latency, throughput or production availability claim is made because those measurements are not established in the repository.
+
+## Limitations
+
+- Required external tools must be installed on the host.
+- LLM enrichment is optional.
+- Additional sandboxing, authorization, auditability and safety testing would be required before treating this as a production autonomous-security platform.
+- No guarantee is made that discovery or vulnerability classification is complete or correct.
 
 ## License
 
-See [LICENSE](LICENSE) if present.
+No explicit open-source license is currently declared for this repository.
+
+Until a license is added by the copyright holder, reuse remains subject to applicable copyright law.
+
+## Author
+
+Paladugu Ganesh Naidu
+
+Repository: https://github.com/paladuguganeshnaidu/Autonomous-Red-Team-Project
